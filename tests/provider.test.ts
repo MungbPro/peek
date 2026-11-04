@@ -1,7 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { defaultConfig } from '../src/main/config';
 import { sseData, streamAnswer, transcribeAudio, contextText, systemPrompt } from '../src/main/provider';
+
+class ManualTimers {
+  private now = 0;
+  private nextId = 0;
+  private pending = new Map<number, { at: number; callback: () => void }>();
+  setTimeout = (callback: () => void, milliseconds: number): number => {
+    const id = ++this.nextId;
+    this.pending.set(id, { at: this.now + milliseconds, callback });
+    return id;
+  };
+  clearTimeout = (handle: unknown): void => { this.pending.delete(handle as number); };
+  get count(): number { return this.pending.size; }
+  advance(milliseconds: number): void {
+    const target = this.now + milliseconds;
+    while (true) {
+      const next = [...this.pending].sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next || next[1].at > target) break;
+      this.now = next[1].at;
+      this.pending.delete(next[0]);
+      next[1].callback();
+    }
+    this.now = target;
+  }
+}
+const drainMicrotasks = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 function streamed(text: string, size = 3): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(text);
@@ -143,4 +169,118 @@ test('SSE rejects one oversized event made of many short data lines', async () =
   await assert.rejects(async () => {
     for await (const _item of sseData(streamed(('data: ' + 'x'.repeat(1000) + '\n').repeat(1001), 2048))) { /* consume */ }
   }, /size limit/);
+});
+
+test('chat continues beyond 60 seconds while keepalives, fragmented events, and tokens arrive', async () => {
+  const timers = new ManualTimers();
+  const caller = new AbortController();
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  let requestSignal!: AbortSignal;
+  const response = new ReadableStream<Uint8Array>({ start(controller) { body = controller; } });
+  const pending = streamAnswer(config, [], caller.signal, () => {}, async (_url, init) => {
+    requestSignal = init!.signal!;
+    return new Response(response);
+  }, undefined, { timers });
+  await drainMicrotasks();
+  const send = async (text: string): Promise<void> => {
+    body.enqueue(new TextEncoder().encode(text));
+    await drainMicrotasks();
+  };
+  timers.advance(59_000);
+  await send(': keepalive\n\n');
+  timers.advance(59_000);
+  await send('data: {"choices":[{"delta":{"content":"A"}}]}\n\n');
+  timers.advance(59_000);
+  await send('data: {"choices":');
+  timers.advance(59_000);
+  assert.equal(requestSignal.aborted, false);
+  await send('[{"delta":{"content":"B"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+  assert.equal(await pending, 'AB');
+  assert.equal(timers.count, 0);
+  assert.equal(getEventListeners(caller.signal, 'abort').length, 0);
+  caller.abort();
+  assert.equal(requestSignal.aborted, false, 'the completed request must no longer listen to its caller');
+});
+
+test('inactivity watchdog aborts a request that never receives response headers', async () => {
+  const timers = new ManualTimers();
+  const caller = new AbortController();
+  let requestSignal!: AbortSignal;
+  const pending = streamAnswer(config, [], caller.signal, () => {}, async (_url, init) => {
+    requestSignal = init!.signal!;
+    return new Promise<Response>((_resolve, reject) => {
+      requestSignal.addEventListener('abort', () => reject(requestSignal.reason), { once: true });
+    });
+  }, undefined, { timers });
+  const rejected = assert.rejects(pending, { name: 'TimeoutError' });
+  timers.advance(59_999);
+  assert.equal(requestSignal.aborted, false);
+  timers.advance(1);
+  await rejected;
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(timers.count, 0);
+  assert.equal(getEventListeners(caller.signal, 'abort').length, 0);
+});
+
+test('inactivity is measured from the latest body bytes and cancels a stalled reader', async () => {
+  const timers = new ManualTimers();
+  const caller = new AbortController();
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  let requestSignal!: AbortSignal;
+  let cancelled = false;
+  const deltas: string[] = [];
+  const response = new ReadableStream<Uint8Array>({
+    start(controller) { body = controller; }, cancel() { cancelled = true; },
+  });
+  const pending = streamAnswer(config, [], caller.signal, delta => deltas.push(delta), async (_url, init) => {
+    requestSignal = init!.signal!;
+    return new Response(response);
+  }, undefined, { timers });
+  const rejected = assert.rejects(pending, { name: 'TimeoutError' });
+  await drainMicrotasks();
+  timers.advance(59_000);
+  body.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+  await drainMicrotasks();
+  timers.advance(59_999);
+  assert.equal(requestSignal.aborted, false);
+  timers.advance(1);
+  await rejected;
+  assert.equal(cancelled, true);
+  assert.deepEqual(deltas, ['partial']);
+  assert.equal(timers.count, 0);
+  assert.equal(getEventListeners(caller.signal, 'abort').length, 0);
+});
+
+test('manual stop reaches pending fetch and response reader, and releases the watchdog', async () => {
+  for (const stage of ['headers', 'body']) {
+    const timers = new ManualTimers();
+    const caller = new AbortController();
+    let requestSignal!: AbortSignal;
+    let cancelled = false;
+    const pending = streamAnswer(config, [], caller.signal, () => {}, async (_url, init) => {
+      requestSignal = init!.signal!;
+      if (stage === 'headers') return new Promise<Response>((_resolve, reject) => {
+        requestSignal.addEventListener('abort', () => reject(requestSignal.reason), { once: true });
+      });
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }));
+    }, undefined, { timers });
+    const rejected = assert.rejects(pending, { name: 'AbortError' });
+    await drainMicrotasks();
+    caller.abort();
+    await rejected;
+    assert.equal(requestSignal.aborted, true);
+    if (stage === 'body') assert.equal(cancelled, true);
+    assert.equal(timers.count, 0);
+    assert.equal(getEventListeners(caller.signal, 'abort').length, 0);
+  }
+});
+
+test('API errors and malformed streams leave no watchdog or caller abort listener', async () => {
+  for (const response of [new Response('private provider body', { status: 401 }), new Response(streamed('data: invalid-json\n\n'))]) {
+    const timers = new ManualTimers();
+    const caller = new AbortController();
+    await assert.rejects(() => streamAnswer(config, [], caller.signal, () => {}, async () => response, undefined, { timers }));
+    assert.equal(timers.count, 0);
+    assert.equal(getEventListeners(caller.signal, 'abort').length, 0);
+  }
 });

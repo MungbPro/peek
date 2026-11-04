@@ -288,7 +288,7 @@ test('latest transcription failure stays actionable until success, pause, or res
   });
 });
 
-test('fast audio uses complete two-second chunks and bounds a fresh flush to three seconds', async () => {
+test('a custom short flush timeout uses complete two-second chunks and stays bounded', async () => {
   await withFlushHarness(async ({ audio, advance, calls, settleRequest, recorderCount }) => {
     await audio.start('');
     await advance(1999);
@@ -311,4 +311,59 @@ test('fast audio uses complete two-second chunks and bounds a fresh flush to thr
     await settleRequest();
     assert.equal(settled, false, 'a late transcription cannot change the already timed-out result');
   }, { chunkMilliseconds: 2000, flushTimeoutMilliseconds: 3000 });
+});
+
+
+test('a slow current transcription can finish after the ten-second response target', async () => {
+  await withFlushHarness(async ({ audio, advance, calls, settleRequest }) => {
+    await audio.start('');
+    await advance(800);
+    let result: boolean | undefined;
+    const flushing = audio.flush().then(value => { result = value; return value; });
+    await advance(0);
+    assert.equal(calls[0]?.duration, 800);
+    await advance(10_000);
+    assert.equal(result, undefined, 'crossing the response target must not abandon the spoken question');
+    assert.equal(audio.active, true);
+    await advance(1_000);
+    await settleRequest();
+    assert.equal(await flushing, true, 'the current question succeeds when its transcription arrives at eleven seconds');
+    assert.equal(audio.active, true, 'rolling recording continues while the current request is processed');
+  }, { chunkMilliseconds: 2000, flushTimeoutMilliseconds: 22_000 });
+});
+
+
+test('discarding old queued audio preserves recording and the latest pending question', async () => {
+  await withFlushHarness(async ({ audio, advance, calls, settleRequest, recorderCount }) => {
+    await audio.start('');
+    await advance(400);
+    let inFlightResult: boolean | undefined;
+    const inFlight = audio.flush().then(value => { inFlightResult = value; return value; });
+    await advance(0);
+    assert.equal(calls.length, 1);
+
+    await advance(400);
+    const oldQueued = audio.flush(); await advance(0);
+    await advance(400);
+    let latestResult: boolean | undefined;
+    const latestQueued = audio.flush().then(value => { latestResult = value; return value; });
+    await advance(0);
+    const recordingCount = recorderCount();
+
+    assert.equal(audio.discardQueuedBefore(100_800), 1);
+    assert.equal(await oldQueued, false, 'only the discarded old question is settled');
+    assert.equal(inFlightResult, undefined, 'main owns cancellation of the active request');
+    assert.equal(latestResult, undefined, 'the latest pending question is retained');
+    assert.equal(audio.active, true);
+    assert.equal(recorderCount(), recordingCount, 'discarding does not restart the recorder');
+
+    assert.equal(audio.discardQueuedBefore(101_000), 0, 'retain a clip that straddles the boundary');
+    await settleRequest(false, 'Prior question was superseded');
+    assert.equal(await inFlight, false);
+    assert.equal(calls.length, 2);
+    assert.match(calls[1]?.header, /^INDEPENDENT-WEBM-2:/, 'next upload is the latest retained question');
+    await settleRequest();
+    assert.equal(await latestQueued, true);
+    assert.equal(audio.active, true);
+  }, { chunkMilliseconds: 2000, flushTimeoutMilliseconds: 22_000 });
 });

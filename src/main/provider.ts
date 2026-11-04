@@ -33,7 +33,7 @@ function httpError(response: Response): Error {
 }
 
 /** SSE parser preserves fragmented UTF-8, CRLF, and multi-line data events. */
-export async function* sseData(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<string> {
+export async function* sseData(stream: ReadableStream<Uint8Array>, signal?: AbortSignal, onActivity?: () => void): AsyncGenerator<string> {
   const reader = stream.getReader();
   const cancel = (): void => { void reader.cancel(signal?.reason).catch(() => {}); };
   signal?.addEventListener('abort', cancel, { once: true });
@@ -51,6 +51,7 @@ export async function* sseData(stream: ReadableStream<Uint8Array>, signal?: Abor
       signal?.throwIfAborted();
       const { done, value } = await reader.read();
       signal?.throwIfAborted();
+      if (!done && value.byteLength > 0) onActivity?.();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       if (buffer.length > 1_000_000) throw new Error('Provider stream event exceeded its size limit.');
       let newline: number;
@@ -76,51 +77,90 @@ export async function* sseData(stream: ReadableStream<Uint8Array>, signal?: Abor
 }
 
 export interface AnswerMetadata { serviceTier: string }
+export interface AnswerStreamOptions {
+  inactivityTimeoutMs?: number;
+  /** An injectable clock keeps watchdog tests deterministic without real waits. */
+  timers?: { setTimeout(callback: () => void, milliseconds: number): unknown; clearTimeout(handle: unknown): void };
+}
 export async function streamAnswer(
   config: Config, messages: ChatMessage[], signal: AbortSignal, onDelta: (text: string) => void,
   fetcher: typeof fetch = fetch, onMetadata?: (metadata: AnswerMetadata) => void,
+  options: AnswerStreamOptions = {},
 ): Promise<string> {
   signal.throwIfAborted();
+  const inactivityTimeoutMs = options.inactivityTimeoutMs ?? 60_000;
+  if (!Number.isSafeInteger(inactivityTimeoutMs) || inactivityTimeoutMs < 1 || inactivityTimeoutMs > 2_147_483_647) throw new Error('Invalid response inactivity timeout.');
   const liveProfile = isOfficialOpenAIEndpoint(config.chat.baseUrl) && isOpenAILiveModel(config.model);
   const parameters = liveProfile
     ? { max_completion_tokens: 4096, reasoning_effort: 'low', service_tier: 'fast' }
     : { [config.chat.tokenLimitParameter]: 400 };
-  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
-  const response = await fetcher(`${config.chat.baseUrl}/chat/completions`, {
-    method: 'POST', headers: { Authorization: `Bearer ${keyFor(config.chat)}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: config.model, messages, stream: true, ...parameters }),
-    signal: requestSignal, redirect: 'error',
-  });
-  requestSignal.throwIfAborted();
-  if (!response.ok) throw httpError(response);
-  if (!response.body) throw new Error('The provider returned no response stream.');
-  let answer = '';
-  let finished = false;
-  let serviceTier: string | undefined;
-  for await (const data of sseData(response.body, requestSignal)) {
+  const timers = options.timers ?? {
+    setTimeout: (callback: () => void, milliseconds: number) => setTimeout(callback, milliseconds),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  };
+  const controller = new AbortController();
+  const requestSignal = controller.signal;
+  const stop = (): void => controller.abort(signal.reason);
+  let timeout: unknown;
+  const clearWatchdog = (): void => {
+    if (timeout !== undefined) timers.clearTimeout(timeout);
+    timeout = undefined;
+  };
+  const refreshWatchdog = (): void => {
+    clearWatchdog();
+    if (!requestSignal.aborted) timeout = timers.setTimeout(() => {
+      timeout = undefined;
+      controller.abort(new DOMException('The response connection stopped sending data.', 'TimeoutError'));
+    }, inactivityTimeoutMs);
+  };
+  signal.addEventListener('abort', stop, { once: true });
+  try {
+    // Cover waiting for response headers, then refresh on every received body
+    // chunk (including SSE keepalives). There is no total answer-time cutoff.
+    refreshWatchdog();
+    const response = await fetcher(`${config.chat.baseUrl}/chat/completions`, {
+      method: 'POST', headers: { Authorization: `Bearer ${keyFor(config.chat)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: config.model, messages, stream: true, ...parameters }),
+      signal: requestSignal, redirect: 'error',
+    });
     requestSignal.throwIfAborted();
-    if (data.trim() === '[DONE]') { finished = true; break; }
-    const chunk = JSON.parse(data) as { error?: unknown; service_tier?: unknown; choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }> };
-    if (chunk.error) throw new Error('The provider reported a streaming error.');
-    if (typeof chunk.service_tier === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(chunk.service_tier) && chunk.service_tier !== serviceTier) {
-      serviceTier = chunk.service_tier;
-      onMetadata?.({ serviceTier });
+    refreshWatchdog();
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw httpError(response);
     }
-    const choice = chunk.choices?.[0];
-    const delta = choice?.delta?.content;
-    if (typeof delta === 'string' && delta) {
-      answer += delta;
-      if (answer.length > 12_000) throw new Error('The response exceeded its size limit.');
-      onDelta(delta);
+    if (!response.body) throw new Error('The provider returned no response stream.');
+    let answer = '';
+    let finished = false;
+    let serviceTier: string | undefined;
+    for await (const data of sseData(response.body, requestSignal, refreshWatchdog)) {
+      requestSignal.throwIfAborted();
+      if (data.trim() === '[DONE]') { finished = true; break; }
+      const chunk = JSON.parse(data) as { error?: unknown; service_tier?: unknown; choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }> };
+      if (chunk.error) throw new Error('The provider reported a streaming error.');
+      if (typeof chunk.service_tier === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(chunk.service_tier) && chunk.service_tier !== serviceTier) {
+        serviceTier = chunk.service_tier;
+        onMetadata?.({ serviceTier });
+      }
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta?.content;
+      if (typeof delta === 'string' && delta) {
+        answer += delta;
+        if (answer.length > 12_000) throw new Error('The response exceeded its size limit.');
+        onDelta(delta);
+      }
+      if (choice?.finish_reason) {
+        if (choice.finish_reason !== 'stop') throw new Error(`Answer incomplete (${choice.finish_reason}). Try a shorter question.`);
+        finished = true;
+      }
     }
-    if (choice?.finish_reason) {
-      if (choice.finish_reason !== 'stop') throw new Error(`Answer incomplete (${choice.finish_reason}). Try a shorter question.`);
-      finished = true;
-    }
+    if (!finished) throw new Error('The connection ended before the answer completed. Please retry.');
+    if (!answer.trim()) throw new Error('The model returned an empty answer.');
+    return answer;
+  } finally {
+    clearWatchdog();
+    signal.removeEventListener('abort', stop);
   }
-  if (!finished) throw new Error('The connection ended before the answer completed. Please retry.');
-  if (!answer.trim()) throw new Error('The model returned an empty answer.');
-  return answer;
 }
 
 export async function transcribeAudio(config: Config, chunk: AudioChunk, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<string> {

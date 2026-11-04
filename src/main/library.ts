@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 export interface LibraryDocument {
   id: string;
@@ -15,6 +16,15 @@ export interface LibraryStatus {
   sections: string[];
   chunks: number;
   warnings: string[];
+  indexDurationMs?: number;
+  indexedAt?: number;
+  indexedBytes?: number;
+}
+
+export interface LibraryProgress {
+  phase: 'scan' | 'index';
+  completed: number;
+  total: number;
 }
 
 export interface SourcePassage {
@@ -48,11 +58,16 @@ interface IndexState {
   postings: Map<string, Map<number, number>>;
   averageLength: number;
   warnings: string[];
+  indexDurationMs?: number;
+  indexedAt?: number;
+  indexedBytes: number;
 }
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_CORPUS_BYTES = 100 * 1024 * 1024;
 const MAX_DOCUMENTS = 2_000;
+// Bound the discovery list even when most candidate files cannot be indexed.
+const MAX_CANDIDATES = 10_000;
 const MAX_PASSAGES = 60_000;
 const CHUNK_CHARS = 2_000;
 const OVERLAP_CHARS = 240;
@@ -67,6 +82,7 @@ function emptyState(): IndexState {
     postings: new Map(),
     averageLength: 1,
     warnings: [],
+    indexedBytes: 0,
   };
 }
 
@@ -169,12 +185,29 @@ export class KnowledgeLibrary {
       sections: [...new Set(this.state.documents.map((document) => document.section))].sort(),
       chunks: this.state.passages.length,
       warnings: [...this.state.warnings],
+      ...(this.state.indexedAt === undefined ? {} : {
+        indexDurationMs: this.state.indexDurationMs,
+        indexedAt: this.state.indexedAt,
+        indexedBytes: this.state.indexedBytes,
+      }),
     };
   }
 
-  /** Rebuild atomically. Invalid roots leave the previous usable index intact. */
-  async load(root: string): Promise<LibraryStatus> {
+  /** Switching to an empty task must invalidate any in-flight import too. */
+  clear(): LibraryStatus {
+    ++this.loadRevision;
+    this.state = emptyState();
+    return this.status();
+  }
+
+  /** Rebuild atomically. Invalid roots leave the previous usable index intact.
+   * Scan progress reports discovered candidates in total, with completed=0.
+   * Index progress has a fixed total and counts attempted files, including skips.
+   * Callbacks are advisory and cannot invalidate an otherwise usable import.
+   */
+  async load(root: string, onProgress?: (progress: LibraryProgress) => void): Promise<LibraryStatus> {
     const revision = ++this.loadRevision;
+    const started = performance.now();
     const resolvedRoot = await realpath(path.resolve(root));
     if (!(await stat(resolvedRoot)).isDirectory()) throw new Error('Choose a folder containing Markdown or text articles.');
     const next = emptyState();
@@ -182,12 +215,17 @@ export class KnowledgeLibrary {
     let bytesRead = 0;
     let totalTerms = 0;
     let capped = false;
+    const candidates: string[] = [];
     const warn = (message: string) => {
       if (next.warnings.length < 50) next.warnings.push(message);
     };
-
+    const progress = (phase: LibraryProgress['phase'], completed: number): void => {
+      if (revision !== this.loadRevision) return;
+      try { onProgress?.({ phase, completed, total: candidates.length }); } catch { /* A UI observer does not own the index. */ }
+    };
+    progress('scan', 0);
     const walk = async (directory: string, depth: number): Promise<void> => {
-      if (capped || revision !== this.loadRevision) return;
+      if (candidates.length >= MAX_CANDIDATES || revision !== this.loadRevision) return;
       if (depth > 20) {
         warn(`Skipped deeply nested folder: ${path.relative(resolvedRoot, directory)}`);
         return;
@@ -196,85 +234,109 @@ export class KnowledgeLibrary {
       try {
         entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
       } catch {
+        if (depth === 0) throw new Error('Cannot read library folder. Check its permissions and try again.');
         warn(`Cannot read folder: ${path.relative(resolvedRoot, directory) || '.'}`);
         return;
       }
       for (const entry of entries) {
-        if (capped || revision !== this.loadRevision) break;
+        if (revision !== this.loadRevision) return;
+        if (candidates.length >= MAX_CANDIDATES) {
+          warn('Library scan limited to 10,000 candidate files; use a smaller vault folder.');
+          return;
+        }
         if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.isSymbolicLink()) continue;
         const filename = path.join(directory, entry.name);
-        if (entry.isDirectory()) {
-          await walk(filename, depth + 1);
-          continue;
-        }
-        if (!entry.isFile() || !/\.(md|markdown|txt)$/i.test(entry.name)) continue;
-        const relativePath = path.relative(resolvedRoot, filename).split(path.sep).join('/');
-        try {
-          const info = await stat(filename);
-          if (info.size > MAX_FILE_BYTES) {
-            warn(`Skipped file over 10 MB: ${relativePath}`);
-            continue;
+        if (entry.isDirectory()) await walk(filename, depth + 1);
+        else if (entry.isFile() && /\.(md|markdown|txt)$/i.test(entry.name)) {
+          candidates.push(filename);
+          if (candidates.length % 100 === 0) {
+            progress('scan', 0);
+            await new Promise<void>((resolve) => setImmediate(resolve));
           }
-          if (next.documents.length >= MAX_DOCUMENTS || bytesRead + info.size > MAX_CORPUS_BYTES || next.passages.length >= MAX_PASSAGES) {
-            capped = true;
-            warn('Library limit reached (2,000 documents, 100 MB, or 60,000 passages); use a smaller vault folder.');
-            break;
-          }
-          const data = await readFile(filename);
-          if (data.byteLength > MAX_FILE_BYTES || bytesRead + data.byteLength > MAX_CORPUS_BYTES) {
-            warn(`Skipped growing or oversized file: ${relativePath}`);
-            continue;
-          }
-          bytesRead += data.byteLength;
-          const text = data.toString('utf8');
-          if (!text.trim() || text.includes('\0')) continue;
-          const document: LibraryDocument = {
-            id: createHash('sha256').update(relativePath).digest('hex').slice(0, 16),
-            title: titleFor(text, filename),
-            section: relativePath.includes('/') ? relativePath.split('/')[0]! : 'Vault root',
-            relativePath,
-          };
-          next.documents.push(document);
-          next.paths.set(document.id, filename);
-          let number = 0;
-          for (const chunk of chunks(text)) {
-            if (next.passages.length >= MAX_PASSAGES) {
-              capped = true;
-              warn('Library passage limit reached; use a smaller vault folder.');
-              break;
-            }
-            const words = tokens(`${document.title}\n${chunk.text}`);
-            const counts = new Map<string, number>();
-            for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
-            const index = next.passages.length;
-            next.passages.push({
-              id: `${document.id}:${++number}`,
-              documentId: document.id,
-              title: document.title,
-              section: document.section,
-              relativePath,
-              ...chunk,
-              length: words.length,
-            });
-            totalTerms += words.length;
-            for (const [word, count] of counts) {
-              let postings = next.postings.get(word);
-              if (!postings) {
-                postings = new Map();
-                next.postings.set(word, postings);
-              }
-              postings.set(index, count);
-            }
-          }
-          // Yield between documents so UI IPC stays responsive during a large import.
-          await new Promise<void>((resolve) => setImmediate(resolve));
-        } catch {
-          warn(`Cannot read article: ${relativePath}`);
         }
       }
+      progress('scan', 0);
     };
     await walk(resolvedRoot, 0);
+    if (revision !== this.loadRevision) return this.status();
+    progress('index', 0);
+    let completed = 0;
+    for (const filename of candidates) {
+      if (capped || revision !== this.loadRevision) break;
+      const relativePath = path.relative(resolvedRoot, filename).split(path.sep).join('/');
+      try {
+        const info = await stat(filename);
+        if (info.size > MAX_FILE_BYTES) {
+          warn(`Skipped file over 10 MB: ${relativePath}`);
+          continue;
+        }
+        if (next.documents.length >= MAX_DOCUMENTS || bytesRead + info.size > MAX_CORPUS_BYTES || next.passages.length >= MAX_PASSAGES) {
+          capped = true;
+          warn('Library limit reached (2,000 documents, 100 MB, or 60,000 passages); use a smaller vault folder.');
+          break;
+        }
+        const data = await readFile(filename);
+        if (data.byteLength > MAX_FILE_BYTES || bytesRead + data.byteLength > MAX_CORPUS_BYTES) {
+          warn(`Skipped growing or oversized file: ${relativePath}`);
+          continue;
+        }
+        bytesRead += data.byteLength;
+        const text = data.toString('utf8');
+        if (!text.trim() || text.includes('\0')) continue;
+        const document: LibraryDocument = {
+          id: createHash('sha256').update(relativePath).digest('hex').slice(0, 16),
+          title: titleFor(text, filename),
+          section: relativePath.includes('/') ? relativePath.split('/')[0]! : 'Vault root',
+          relativePath,
+        };
+        next.documents.push(document);
+        next.paths.set(document.id, filename);
+        next.indexedBytes += data.byteLength;
+        let number = 0;
+        for (const chunk of chunks(text)) {
+          if (revision !== this.loadRevision) break;
+          if (next.passages.length >= MAX_PASSAGES) {
+            capped = true;
+            warn('Library passage limit reached; use a smaller vault folder.');
+            break;
+          }
+          const words = tokens(`${document.title}\n${chunk.text}`);
+          const counts = new Map<string, number>();
+          for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
+          const index = next.passages.length;
+          next.passages.push({
+            id: `${document.id}:${++number}`,
+            documentId: document.id,
+            title: document.title,
+            section: document.section,
+            relativePath,
+            ...chunk,
+            length: words.length,
+          });
+          totalTerms += words.length;
+          for (const [word, count] of counts) {
+            let postings = next.postings.get(word);
+            if (!postings) {
+              postings = new Map();
+              next.postings.set(word, postings);
+            }
+            postings.set(index, count);
+          }
+          // Large single files also yield, so setup UI and IPC remain usable.
+          if (number % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      } catch {
+        warn(`Cannot read article: ${relativePath}`);
+      } finally {
+        ++completed;
+        progress('index', completed);
+        // Avoid keeping the main event loop busy across many small documents.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
     next.averageLength = totalTerms / Math.max(1, next.passages.length) || 1;
+    next.indexDurationMs = Math.round(performance.now() - started);
+    next.indexedAt = Date.now();
     if (revision === this.loadRevision) this.state = next;
     return this.status();
   }

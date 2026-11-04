@@ -151,7 +151,7 @@ export function startModifierMonitor(
       clearInterval(timer);
       stopped = true;
       if (!win.isDestroyed()) win.setIgnoreMouseEvents(true, { forward: true });
-      if (active) onChange(false);
+      onChange(false);
       console.warn('Peek modifier monitoring stopped. Restart Peek to retry.', error instanceof Error ? error.message : String(error));
     }
   }, 60);

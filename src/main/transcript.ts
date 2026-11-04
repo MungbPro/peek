@@ -12,9 +12,9 @@ export class TranscriptBuffer {
     this.segments = this.segments.slice(-24);
   }
   prune(): void { this.segments = this.segments.filter(s => s.endedAt > this.clock() - 60_000); }
-  recent(seconds = 30): string {
+  recent(seconds = 30, since = 0): string {
     this.prune();
-    return this.segments.filter(s => s.endedAt > this.clock() - Math.min(60, Math.max(0, seconds)) * 1000)
+    return this.segments.filter(s => s.startedAt >= since && s.endedAt > this.clock() - Math.min(60, Math.max(0, seconds)) * 1000)
       .map(s => s.text).join('\n').slice(-24000);
   }
   clear(): void { this.segments = []; }

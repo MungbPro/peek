@@ -37,7 +37,7 @@ export class RollingAudio {
     this.chunkMilliseconds = options.chunkMilliseconds ?? 5000;
     this.flushTimeoutMilliseconds = options.flushTimeoutMilliseconds ?? 7000;
     if (!Number.isInteger(this.chunkMilliseconds) || this.chunkMilliseconds < 250 || this.chunkMilliseconds > 15_000) throw new Error('Audio chunks must be between 250 and 15,000 milliseconds.');
-    if (!Number.isInteger(this.flushTimeoutMilliseconds) || this.flushTimeoutMilliseconds < 1 || this.flushTimeoutMilliseconds > 10_000) throw new Error('Audio flush timeout must be between 1 and 10,000 milliseconds.');
+    if (!Number.isInteger(this.flushTimeoutMilliseconds) || this.flushTimeoutMilliseconds < 1 || this.flushTimeoutMilliseconds > 60_000) throw new Error('Audio flush timeout must be between 1 and 60,000 milliseconds.');
   }
 
   get active(): boolean { return this.wanted; }
@@ -85,6 +85,24 @@ export class RollingAudio {
     this.cleanup();
     this.latestError = null;
     this.callbacks.status('idle', 'Audio paused. The rolling transcript has been cleared.');
+  }
+
+  /** Forget waiting clips that ended at or before the next question's boundary.
+   * A clip spanning the boundary stays intact. The current recorder, stream,
+   * generation and in-flight transcription are deliberately left untouched.
+   */
+  discardQueuedBefore(cutoff: number): number {
+    if (!Number.isFinite(cutoff)) return 0;
+    const retained: typeof this.queue = [];
+    let discarded = 0;
+    for (const item of this.queue) {
+      if (item.chunk.endedAt <= cutoff) {
+        item.clip.settle(false);
+        ++discarded;
+      } else retained.push(item);
+    }
+    this.queue = retained;
+    return discarded;
   }
 
   /** Finish the spoken question now; never wait indefinitely for the network. */

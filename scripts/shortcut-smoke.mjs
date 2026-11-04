@@ -51,7 +51,7 @@ async function launchPeek({ simulateRefusal = false } = {}) {
   peek = application;
   const page = await application.firstWindow();
   await page.waitForFunction(() => typeof window.peek?.bootstrap === 'function');
-  await page.waitForFunction(() => document.querySelector('#connect-key')?.textContent === 'Connect OpenAI');
+  await page.waitForFunction(() => document.querySelector('#new-task')?.textContent === 'New task');
   return { application, page, boot: await page.evaluate(() => window.peek.bootstrap()) };
 }
 
@@ -70,7 +70,9 @@ async function assertRefusalVisible({ application, page, boot }) {
   assert.equal(await warning.isVisible(), true);
   const warningText = await warning.textContent();
   assert.match(warningText, /Control\+Enter.*unavailable/);
-  assert.equal(await page.locator('#ask-key').textContent(), '');
+  assert.equal(await page.locator('#ask-key').textContent(), 'Peek menu');
+  assert.equal(await page.locator('#ask-key-hint').isVisible(), true);
+  assert.match(await page.locator('#return-route').textContent(), /Peek.*Show/);
   // An unrelated notice and a UI language change must not erase the conflict.
   await application.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].webContents.send('peek:event', {
@@ -127,6 +129,8 @@ try {
   const blocked = await launchPeek();
   assert.equal(blocked.boot.chatReady, false);
   assert.equal(blocked.boot.transcriptionReady, false);
+  assert.equal(blocked.boot.activeTask, null);
+  assert.equal(await blocked.page.locator('#task-panel').isVisible(), true);
   const conflictWasReported = blocked.boot.config.hotkeys.ask === '';
   assert.equal(blocked.boot.config.hotkeys.toggle, 'Control+Backspace');
   assert.equal(blocked.boot.config.hotkeys.followUp, '');
@@ -164,7 +168,13 @@ try {
   assert.equal(available.boot.config.hotkeys.ask, 'Control+Enter');
   assert.deepEqual(available.boot.shortcutWarnings, []);
   assert.equal(await available.page.locator('#shortcut-warning').isVisible(), false);
-  assert.match(await available.page.locator('#ask-key').textContent(), /Control.*Enter/);
+  assert.match(await available.page.locator('#ask-key').textContent(), /Ctrl.*Enter/);
+  assert.match(await available.page.locator('#toggle-key').textContent(), /Ctrl.*(?:⌫|Backspace)/);
+  assert.match(await available.page.locator('#toggle-key-label').textContent(), /Hide.*return/);
+  await available.page.locator('#hide-window').click();
+  assert.equal(await available.application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false);
+  await available.page.evaluate(() => window.peek.setVisible(true));
+  assert.equal(await available.application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), true);
   assert.deepEqual(await nativeBindings(available.application), {
     'Control+Enter': true, 'Control+Backspace': true,
     'Alt+Space': false, 'Alt+H': false, 'Alt+Enter': false,
@@ -188,7 +198,7 @@ try {
   assert.deepEqual(JSON.parse(await readFile(join(refusalData, 'config.json'), 'utf8')).hotkeys,
     { ask: 'Control+Enter', toggle: 'Control+Backspace', followUp: '' });
   console.log('PASS: native registration checks, saved legacy migration, no Option bindings, and successful registration after releasing the fixture.');
-  console.log('PASS (SIMULATED register refusal): disabled shortcut hint and persistent failure warning in the actual built main/renderer.');
+  console.log('PASS (SIMULATED register refusal): tray shortcut fallback and persistent failure warning in the actual built main/renderer.');
   console.log('No system key events, API calls, audio recording, or screen captures were requested.');
 } finally {
   await closeOwnedApplication(peek);

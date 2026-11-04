@@ -18,7 +18,13 @@
       <div id="shortcut-warning" class="notice" role="status" hidden></div>
       <div id="notice" class="notice" role="status" hidden></div>
 
-      <div class="context-toolbar"><button id="prepare-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="prepare-panel">准备</button><span id="focused-title">未选文章</span></div>
+      <section id="task-panel" class="task-panel" aria-label="Tasks">
+        <div class="task-heading"><h2 id="task-heading">开始任务</h2><button id="new-task" class="primary-button" type="button">新任务</button></div>
+        <p id="task-save-hint" class="task-hint">问答保存在本机。</p>
+        <div id="task-list" class="task-list"></div>
+      </section>
+
+      <div id="context-toolbar" class="context-toolbar" hidden><button id="tasks-toggle" class="text-button" type="button">任务</button><button id="prepare-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="prepare-panel">准备</button><span id="focused-title">未选文章</span></div>
       <section id="prepare-panel" class="prepare-panel" aria-label="Prepare presentation" hidden>
         <select id="model" aria-label="模型 / Model"><option value="gpt-6.1-sol">GPT-6.1 Sol</option><option value="gpt-6-astra">GPT-6 Astra</option></select>
         <div class="library-actions"><span id="library-count">Markdown / TXT</span><button id="choose-library" class="text-button" type="button">打开文库</button><button id="reload-library" class="text-button" type="button" disabled>刷新</button></div>
@@ -27,21 +33,26 @@
         <button id="prepare-done" class="secondary-button" type="button">开始</button>
       </section>
 
-      <section id="response-area" class="response-area" aria-label="Answer">
+      <section id="response-area" class="response-area" aria-label="Answer" hidden>
         <div id="capture-warning" class="notice" role="status" hidden></div>
         <div id="empty-state" class="empty-state">
           <h2 id="empty-title">随时提问。</h2>
           <button id="connect-key" class="primary-button connect-key" type="button" hidden>连接 OpenAI</button>
-          <div id="ask-key-hint" class="empty-key"><kbd id="ask-key">Control Enter</kbd></div>
         </div>
         <div id="answer" class="answer" role="log" aria-live="polite" aria-relevant="additions text"></div>
         <details id="sources-panel" class="sources-panel" hidden><summary id="sources-label">关联</summary><div id="sources"></div></details>
+        <details id="history-panel" class="history-panel" hidden><summary id="history-label">历史</summary><div id="task-history"></div></details>
       </section>
 
-      <section class="voice-controls" aria-label="Answer from speech">
+      <section id="voice-controls" class="voice-controls" aria-label="Answer from speech" hidden>
         <div id="request-state" class="request-state" role="status"></div>
         <div class="composer-actions"><button id="new-topic" class="secondary-button" type="button">新话题</button><button id="cancel" class="text-button" type="button" hidden>停止</button><button id="ask" class="primary-button voice-answer" type="button">回答</button></div>
       </section>
+
+      <div class="shortcut-controls">
+        <div class="shortcut-row"><span id="ask-key-hint"><kbd id="ask-key"></kbd> <span id="ask-key-label">回答</span></span><span id="toggle-key-hint"><kbd id="toggle-key"></kbd> <span id="toggle-key-label">隐藏/回来</span></span><button id="hide-window" class="text-button" type="button">隐藏</button></div>
+        <div id="return-route" class="return-route">隐藏后再按同一快捷键回来；也可点菜单栏 Peek → 显示 Peek。</div>
+      </div>
 
       <footer class="footer"><span id="hold-hint">按住 Shift 操作</span><button id="manage-key" class="footer-key" type="button">密钥</button><details id="audio-details" class="audio-details"><summary id="audio-state">音频关闭</summary><div class="diagnostics"><strong id="audio-input-label">音频输入</strong><p id="audio-message"></p><div id="devices">开启音频后显示设备。</div></div></details></footer>
     </main>

@@ -6,6 +6,7 @@ dist/
 .DS_Store
 artifacts/
 release/
+release-next/
 credentials.enc
 credentials.enc.*
 *.log

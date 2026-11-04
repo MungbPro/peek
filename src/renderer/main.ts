@@ -1,5 +1,5 @@
 import { RollingAudio } from './audio';
-import type { Bootstrap, LibraryStatus, PeekEvent, SourcePassage } from '../shared/types';
+import type { Bootstrap, LibraryStatus, PeekEvent, SavedTask, SourcePassage, TaskContext, TaskSummary } from '../shared/types';
 import { FAST_LIMITS } from '../shared/timing';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -19,7 +19,11 @@ const elements = {
   sourcesPanel: $<HTMLDetailsElement>('sources-panel'), sources: $('sources'), sourcesLabel: $('sources-label'),
   audioInputLabel: $('audio-input-label'),
   requestState: $('request-state'), ask: $<HTMLButtonElement>('ask'), newTopic: $<HTMLButtonElement>('new-topic'), cancel: $<HTMLButtonElement>('cancel'),
-  askKey: $('ask-key'), askKeyHint: $('ask-key-hint'), holdHint: $('hold-hint'),
+  askKey: $('ask-key'), askKeyHint: $('ask-key-hint'), askKeyLabel: $('ask-key-label'), holdHint: $('hold-hint'),
+  toggleKey: $('toggle-key'), toggleKeyHint: $('toggle-key-hint'), toggleKeyLabel: $('toggle-key-label'), hideWindow: $<HTMLButtonElement>('hide-window'), returnRoute: $('return-route'),
+  taskPanel: $('task-panel'), taskHeading: $('task-heading'), taskSaveHint: $('task-save-hint'), taskList: $('task-list'), newTask: $<HTMLButtonElement>('new-task'),
+  contextToolbar: $('context-toolbar'), tasksToggle: $<HTMLButtonElement>('tasks-toggle'), voiceControls: $('voice-controls'),
+  historyPanel: $<HTMLDetailsElement>('history-panel'), historyLabel: $('history-label'), taskHistory: $('task-history'),
   connectKey: $<HTMLButtonElement>('connect-key'), manageKey: $<HTMLButtonElement>('manage-key'),
 };
 
@@ -36,19 +40,28 @@ let audioState: 'idle' | 'recording' | 'error' = 'idle';
 let latestSources: SourcePassage[] = [];
 let openingCredentials = false;
 let changingModel = false;
+let changingTask = false;
+let switchingQuestion = false;
+let lastQuestionAt = 0;
+let taskStage: 'choose' | 'new' | 'active' = 'choose';
+let activeTask: SavedTask | null = null;
+let tasks: TaskSummary[] = [];
+let preparationMode = true;
 let askEpoch = 0;
 let pendingPhase: 'speech' | 'answer' | null = null;
 let turnStartedAt = 0;
 let turnEndedAt = 0;
 let firstTokenAt = 0;
 let serviceTier = '';
-let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 let timingTimer: ReturnType<typeof setInterval> | undefined;
 
 function renderTiming(): void {
   const totalMs = turnStartedAt ? Math.max(0, (turnEndedAt || Date.now()) - turnStartedAt) : 0;
   const elapsed = turnStartedAt ? `${(totalMs / 1000).toFixed(1)}s` : '';
-  elements.requestState.textContent = [pendingPhase === 'speech' && busy ? t('waitingAudio') : '', elapsed, serviceTier].filter(Boolean).join(' · ');
+  const pastTarget = busy && totalMs >= FAST_LIMITS.targetMs;
+  const status = pendingPhase === 'speech' && busy ? t('waitingAudio') : pastTarget ? (language === 'zh' ? '仍在生成' : 'Still generating') : '';
+  elements.requestState.textContent = [status, elapsed, serviceTier].filter(Boolean).join(' · ');
+  elements.requestState.dataset.pastTarget = String(pastTarget);
   elements.requestState.dataset.totalMs = turnStartedAt ? String(totalMs) : '';
   elements.requestState.dataset.firstTokenMs = firstTokenAt ? String(firstTokenAt - turnStartedAt) : '';
   elements.requestState.dataset.serviceTier = serviceTier;
@@ -56,7 +69,7 @@ function renderTiming(): void {
 }
 
 function finishTiming(): void {
-  clearTimeout(deadlineTimer); clearInterval(timingTimer);
+  clearInterval(timingTimer);
   if (turnStartedAt && !turnEndedAt) turnEndedAt = Date.now();
   renderTiming();
 }
@@ -71,6 +84,7 @@ const labels = {
     noKey: '点击「连接 OpenAI」设置密钥。', noAudioKey: '请在密钥窗口连接语音转写服务。',
     connectTitle: '连接后即可提问。', connectKey: '连接 OpenAI', manageKey: '密钥',
     openSource: '打开原文', setupError: '启动失败：', audioFailed: '音频异常。', noDevices: '开启音频后显示设备。', unnamed: '未命名输入',
+    taskHeading: '开始任务', newTask: '新任务', continueTask: '继续', tasks: '任务', taskSaveHint: '问答保存在本机。', noTasks: '还没有任务。点击「新任务」开始。', history: '历史', startTask: '开始任务', saveContext: '完成', noShortcut: '菜单栏 Peek', hide: '隐藏', hideReturn: '隐藏/回来', returnRoute: '菜单栏 Peek → 显示', directClick: '可直接点击', chooseTask: '请先新建或继续任务。', finishPreparation: '请先点击「完成」保存准备内容。',
   },
   en: {
     pass: 'Click-through', interactive: 'Interactive', startAudio: 'Start audio', pauseAudio: 'Pause audio', audioOff: 'Audio off', audioError: 'Audio error', listening: 'Listening · 2s',
@@ -81,6 +95,7 @@ const labels = {
     noKey: 'Click Connect OpenAI to set up your key.', noAudioKey: 'Connect transcription in the API key window.',
     connectTitle: 'Connect to start asking.', connectKey: 'Connect OpenAI', manageKey: 'API key',
     openSource: 'Open source', setupError: 'Could not start: ', audioFailed: 'Audio failed.', noDevices: 'Start audio to list inputs.', unnamed: 'Unnamed input',
+    taskHeading: 'Start a task', newTask: 'New task', continueTask: 'Continue', tasks: 'Tasks', taskSaveHint: 'Questions and answers stay on this computer.', noTasks: 'No tasks yet. Choose New task to begin.', history: 'History', startTask: 'Start task', saveContext: 'Done', noShortcut: 'Peek menu', hide: 'Hide', hideReturn: 'Hide / return', returnRoute: 'Menu bar Peek → Show', directClick: 'Click to prepare', chooseTask: 'Create or continue a task first.', finishPreparation: 'Choose Done to save your preparation first.',
   },
 } as const;
 const t = (key: keyof typeof labels.zh): string => labels[language][key];
@@ -107,15 +122,28 @@ function updateLanguage(): void {
   elements.audioInputLabel.textContent = t('audioInput');
   elements.newTopic.textContent = t('newTopic');
   elements.cancel.textContent = t('stop');
+  elements.taskHeading.textContent = t('taskHeading');
+  elements.taskSaveHint.textContent = t('taskSaveHint');
+  elements.newTask.textContent = t('newTask');
+  elements.tasksToggle.textContent = t('tasks');
+  elements.askKeyLabel.textContent = t('answer');
+  elements.toggleKeyLabel.textContent = t('hideReturn');
+  elements.hideWindow.textContent = t('hide');
+  elements.returnRoute.textContent = bootstrap?.config.hotkeys.toggle
+    ? language === 'zh' ? '隐藏后再按同一快捷键回来；也可点菜单栏 Peek → 显示 Peek。' : 'Press the same shortcut to return, or choose menu bar Peek → Show Peek.'
+    : language === 'zh' ? '隐藏后，点菜单栏 Peek → 显示 Peek 回来。' : 'To return after hiding, choose menu bar Peek → Show Peek.';
   if (bootstrap) {
     const modifiers = bootstrap.config.interactionModifiers.map(displayShortcut).join(' + ');
     elements.holdHint.textContent = language === 'zh' ? `按住 ${modifiers} 操作` : `Hold ${modifiers} to interact`;
     elements.ask.title = displayShortcut(bootstrap.config.hotkeys.ask);
-    elements.askKey.textContent = displayShortcut(bootstrap.config.hotkeys.ask);
+    elements.askKey.textContent = displayShortcut(bootstrap.config.hotkeys.ask) || t('noShortcut');
+    elements.toggleKey.textContent = displayShortcut(bootstrap.config.hotkeys.toggle) || t('noShortcut');
   }
   updateAudioLabels();
   updateLibrary(library);
   renderSources(latestSources);
+  renderTaskList();
+  renderHistory();
   updateActions();
 }
 
@@ -130,32 +158,169 @@ function errorText(error: unknown): string {
 }
 
 function displayShortcut(shortcut: string): string {
-  return shortcut.replace(/CommandOrControl|Command|Cmd/g, navigator.platform.includes('Mac') ? 'Command' : 'Control').replace(/Alt|Option/g, navigator.platform.includes('Mac') ? 'Option' : 'Alt').replace(/Enter/g, language === 'zh' ? '回车' : 'Enter').replace(/\+/g, ' + ');
+  return shortcut.replace(/CommandOrControl|Command|Cmd/g, navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replace(/Control|Ctrl/g, 'Ctrl').replace(/Alt|Option/g, navigator.platform.includes('Mac') ? 'Option' : 'Alt').replace(/Enter/g, language === 'zh' ? '回车' : 'Enter').replace(/Backspace/g, navigator.platform.includes('Mac') ? '⌫' : 'Backspace').replace(/\+/g, ' + ');
 }
 
 function updateActions(): void {
-  elements.ask.disabled = !bootstrap?.chatReady || busy || loadingLibrary || changingModel;
-  elements.newTopic.disabled = busy || loadingLibrary;
-  elements.prepareToggle.disabled = busy;
-  elements.prepareDone.disabled = busy;
-  elements.focusArticle.disabled = busy || loadingLibrary;
-  elements.section.disabled = busy || loadingLibrary;
-  elements.model.disabled = !bootstrap?.modelSelectionAvailable || busy || loadingLibrary || openingCredentials || changingModel;
+  const live = taskStage === 'active' && Boolean(activeTask);
+  const preparing = !elements.preparePanel.hidden;
+  elements.taskPanel.hidden = taskStage !== 'choose';
+  elements.contextToolbar.hidden = taskStage === 'choose';
+  elements.responseArea.hidden = !live;
+  elements.voiceControls.hidden = !live;
+  elements.ask.disabled = !live || preparing || !bootstrap?.chatReady || switchingQuestion || loadingLibrary || changingModel || changingTask;
+  elements.audioToggle.disabled = !live || preparing || changingTask;
+  elements.newTopic.disabled = !live || busy || loadingLibrary || changingTask;
+  elements.prepareToggle.disabled = busy || changingTask || taskStage === 'new';
+  elements.tasksToggle.disabled = busy || loadingLibrary || changingTask;
+  elements.newTask.disabled = !bootstrap || changingTask || loadingLibrary;
+  elements.prepareDone.disabled = !bootstrap || busy || loadingLibrary || changingModel || changingTask;
+  elements.prepareDone.textContent = t(taskStage === 'new' ? 'startTask' : 'saveContext');
+  elements.focusArticle.disabled = busy || loadingLibrary || changingTask;
+  elements.section.disabled = busy || loadingLibrary || changingTask;
+  elements.model.disabled = !bootstrap?.modelSelectionAvailable || busy || loadingLibrary || openingCredentials || changingModel || changingTask;
   elements.cancel.hidden = !busy;
-  elements.ask.textContent = t(busy ? (pendingPhase === 'speech' ? 'waitingAudio' : 'asking') : audio.active ? 'ask' : 'startListening');
+  elements.ask.textContent = busy ? (language === 'zh' ? '下一题' : 'Next question') : t(audio.active ? 'ask' : 'startListening');
   elements.answer.classList.toggle('streaming', busy && requestId !== null);
   renderTiming();
   elements.emptyTitle.textContent = t(bootstrap?.chatReady ? 'ready' : 'connectTitle');
   elements.connectKey.hidden = Boolean(bootstrap?.chatReady);
-  elements.askKeyHint.hidden = !bootstrap?.chatReady || !bootstrap.config.hotkeys.ask;
+  elements.askKeyHint.hidden = false;
   elements.connectKey.disabled = openingCredentials;
   elements.manageKey.disabled = openingCredentials;
+  if (bootstrap) {
+    const modifiers = bootstrap.config.interactionModifiers.map(displayShortcut).join(' + ');
+    elements.holdHint.textContent = preparationMode ? t('directClick') : language === 'zh' ? `按住 ${modifiers} 操作` : `Hold ${modifiers} to interact`;
+  }
+}
+
+function renderTaskList(): void {
+  elements.taskList.replaceChildren();
+  if (!tasks.length) {
+    const empty = document.createElement('p'); empty.className = 'task-empty'; empty.textContent = t('noTasks');
+    elements.taskList.append(empty); return;
+  }
+  for (const task of [...tasks].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'task-card'; button.dataset.taskId = task.id;
+    button.disabled = changingTask;
+    const title = document.createElement('span'); title.className = 'task-title'; title.textContent = task.name;
+    const meta = document.createElement('span'); meta.className = 'task-meta';
+    meta.textContent = `${formatTaskTime(task.updatedAt)} · ${task.turnCount} ${language === 'zh' ? '次问答' : 'Q&A'}`;
+    const resume = document.createElement('span'); resume.className = 'task-resume'; resume.textContent = t('continueTask');
+    button.append(title, meta, resume);
+    button.addEventListener('click', () => { void continueTask(task.id); });
+    elements.taskList.append(button);
+  }
+}
+
+function formatTaskTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-AU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderHistory(): void {
+  const turns = activeTask?.turns ?? [];
+  elements.historyPanel.hidden = turns.length === 0;
+  elements.historyLabel.textContent = `${t('history')} · ${turns.length}`;
+  elements.taskHistory.replaceChildren();
+  for (const turn of [...turns].reverse()) {
+    const entry = document.createElement('article'); entry.className = 'history-entry';
+    const time = document.createElement('span'); time.className = 'history-time'; time.textContent = `${formatTaskTime(turn.createdAt)} · ${turn.model}`;
+    const question = document.createElement('p'); question.className = 'history-question'; question.textContent = turn.question;
+    const answer = document.createElement('p'); answer.className = 'history-answer'; answer.textContent = turn.answer;
+    entry.append(time, question, answer);
+    if (turn.sources.length) {
+      const citations = document.createElement('p'); citations.className = 'history-time';
+      citations.textContent = turn.sources.map(source => `${source.relativePath}:${source.startLine}–${source.endLine}`).join(' · ');
+      entry.append(citations);
+    }
+    elements.taskHistory.append(entry);
+  }
+}
+
+function rememberTask(task: SavedTask): void {
+  const summary: TaskSummary = { id: task.id, name: task.name, createdAt: task.createdAt, updatedAt: task.updatedAt, turnCount: task.turns.length, context: task.context };
+  tasks = [summary, ...tasks.filter(item => item.id !== task.id)];
+  renderTaskList();
+}
+
+function contextForTask(): TaskContext {
+  const focused = library.documents.find(doc => doc.id === focusedDocumentId);
+  return {
+    libraryPath: library.root || '', model: bootstrap!.config.model,
+    ...(focused ? { focusDocumentId: focused.id, focusRelativePath: focused.relativePath, focusTitle: focused.title } : {}),
+    ...(elements.section.value ? { section: elements.section.value } : {}),
+  };
+}
+
+function showSavedTask(task: SavedTask): void {
+  lastQuestionAt = 0;
+  activeTask = task; taskStage = 'active';
+  rememberTask(task);
+  clearThreadView();
+  const latest = task.turns.at(-1);
+  if (latest) {
+    elements.answer.textContent = latest.answer;
+    elements.emptyState.hidden = Boolean(latest.answer);
+    hasThread = true;
+  }
+  renderHistory();
+  updateScopeLabel();
+  updateActions();
+}
+
+async function chooseTask(): Promise<void> {
+  if (busy || changingTask || loadingLibrary) return;
+  audio.stop(); clearThreadView(); taskStage = 'choose';
+  setPreparation(false);
+  updateActions();
+  try { tasks = await window.peek.listTasks(); renderTaskList(); }
+  catch (error) { showNotice(errorText(error)); }
+}
+
+function newTask(): void {
+  if (busy || changingTask || !bootstrap) return;
+  audio.stop(); activeTask = null; taskStage = 'new';
+  clearThreadView(); renderHistory(); showNotice('');
+  setPreparation(true);
+  updateActions();
+}
+
+async function continueTask(id: string): Promise<void> {
+  if (changingTask || busy) return;
+  changingTask = true; audio.stop(); updateActions(); renderTaskList();
+  try {
+    const result = await window.peek.selectTask(id);
+    bootstrap!.config.model = result.task.context.model;
+    if (![...elements.model.options].some(option => option.value === result.task.context.model)) elements.model.add(new Option(result.task.context.model, result.task.context.model));
+    elements.model.value = result.task.context.model;
+    updateLibrary(result.library);
+    elements.section.value = result.task.context.section && result.library.sections.includes(result.task.context.section) ? result.task.context.section : '';
+    focusedDocumentId = result.library.documents.find(doc => doc.id === result.task.context.focusDocumentId || doc.relativePath === result.task.context.focusRelativePath)?.id || '';
+    updateArticles();
+    showSavedTask(result.task);
+    await setPreparation(result.needsPreparation);
+    showNotice(result.warning);
+  } catch (error) { showNotice(errorText(error)); }
+  finally { changingTask = false; updateActions(); renderTaskList(); }
+}
+
+async function startTask(): Promise<void> {
+  if (!bootstrap || changingTask || busy || loadingLibrary || changingModel) return;
+  changingTask = true; updateActions();
+  try {
+    const task = taskStage === 'new' || !activeTask ? await window.peek.createTask(contextForTask()) : await window.peek.updateTask(contextForTask());
+    activeTask = task; taskStage = 'active'; hasThread = task.turns.length > 0; rememberTask(task); renderHistory();
+    updateScopeLabel();
+    await setPreparation(false);
+    showNotice('');
+  } catch (error) { showNotice(errorText(error)); }
+  finally { changingTask = false; updateActions(); }
 }
 
 function updateScopeLabel(): void {
   const doc = library.documents.find((item) => item.id === focusedDocumentId);
-  elements.focusedTitle.textContent = doc?.title || t('noArticle');
-  elements.focusedTitle.title = doc?.relativePath || '';
+  elements.focusedTitle.textContent = doc?.title || activeTask?.name || t('noArticle');
+  elements.focusedTitle.title = doc?.relativePath || activeTask?.name || '';
 }
 
 function updateArticles(): void {
@@ -180,7 +345,7 @@ function updateLibrary(next: LibraryStatus): void {
   const previousSection = elements.section.value;
   elements.section.replaceChildren(new Option(t('entireLibrary'), ''), ...library.sections.map((section) => new Option(section, section)));
   if (library.sections.includes(previousSection)) elements.section.value = previousSection;
-  elements.libraryCount.textContent = library.root ? `${library.documents.length} ${language === 'zh' ? '篇' : 'articles'} · ${library.chunks.toLocaleString()} ${language === 'zh' ? '段' : 'passages'}` : 'Markdown / TXT';
+  elements.libraryCount.textContent = library.root ? `${library.documents.length} ${language === 'zh' ? '篇' : 'articles'} · ${library.chunks.toLocaleString()} ${language === 'zh' ? '段' : 'passages'}${library.indexDurationMs === undefined ? '' : ` · ${(library.indexDurationMs / 1000).toFixed(1)}s`}` : 'Markdown / TXT';
   elements.libraryCount.title = library.root || '';
   elements.reloadLibrary.disabled = !library.root || loadingLibrary;
   updateArticles();
@@ -295,17 +460,41 @@ function onEvent(event: PeekEvent): void {
       updateActions();
       break;
     case 'library': clearThreadView(); updateLibrary(event.library); break;
+    case 'task-saved':
+      rememberTask(event.task);
+      if (activeTask?.id === event.task.id) { activeTask = event.task; renderHistory(); }
+      break;
+    case 'library-progress':
+      elements.libraryCount.textContent = language === 'zh'
+        ? `${event.progress.phase === 'scan' ? '查找文章' : '建立索引'} ${event.progress.completed}/${event.progress.total}`
+        : `${event.progress.phase === 'scan' ? 'Finding articles' : 'Indexing'} ${event.progress.completed}/${event.progress.total}`;
+      break;
   }
 }
 
-function setPreparation(open: boolean): void {
+async function setPreparation(open: boolean): Promise<void> {
   elements.preparePanel.hidden = !open;
   elements.prepareToggle.setAttribute('aria-expanded', String(open));
+  const nextMode = open || taskStage !== 'active';
+  if (nextMode && !preparationMode) audio.stop();
+  if (nextMode !== preparationMode) {
+    try { await window.peek.setPreparationMode(nextMode); preparationMode = nextMode; }
+    catch (error) {
+      elements.preparePanel.hidden = false;
+      elements.prepareToggle.setAttribute('aria-expanded', 'true');
+      preparationMode = true;
+      showNotice(errorText(error));
+    }
+  }
+  updateActions();
 }
 
 async function ask(): Promise<void> {
+  if (taskStage !== 'active' || !activeTask) { showNotice(t('chooseTask')); return; }
+  if (!elements.preparePanel.hidden) { showNotice(t('finishPreparation')); return; }
   if (!bootstrap?.chatReady) { showNotice(t('noKey')); void openCredentials(); return; }
-  if (busy || loadingLibrary || changingModel) return;
+  if (switchingQuestion || loadingLibrary || changingModel || changingTask) return;
+  if (busy) { await nextQuestion(true); return; }
   if (!audio.active) {
     if (!bootstrap.transcriptionReady) { showNotice(t('noAudioKey')); void openCredentials(); return; }
     await audio.start(bootstrap.config.inputDeviceId);
@@ -317,8 +506,8 @@ async function ask(): Promise<void> {
     return;
   }
   const epoch = ++askEpoch;
+  lastQuestionAt = Date.now();
   turnStartedAt = Date.now(); turnEndedAt = 0; firstTokenAt = 0; serviceTier = '';
-  const deadlineAt = turnStartedAt + FAST_LIMITS.turnMs;
   busy = true;
   pendingPhase = 'speech';
   requestId = crypto.randomUUID();
@@ -326,15 +515,6 @@ async function ask(): Promise<void> {
   setPreparation(false);
   updateActions();
   timingTimer = setInterval(renderTiming, 100);
-  deadlineTimer = setTimeout(() => {
-    if (epoch !== askEpoch || !busy) return;
-    ++askEpoch;
-    busy = false; pendingPhase = null; requestId = null;
-    finishTiming();
-    showNotice(language === 'zh' ? '已到 10 秒时限。本次未完成，请重试。' : '10-second limit reached. This answer is incomplete; please retry.');
-    updateActions();
-    void window.peek.cancel().catch(() => {});
-  }, FAST_LIMITS.turnMs);
   try {
     const fresh = await audio.flush();
     if (epoch !== askEpoch) return;
@@ -347,7 +527,7 @@ async function ask(): Promise<void> {
     pendingPhase = 'answer';
     updateActions();
     await window.peek.ask({
-      requestId: requestId!, intent: '', followUp: hasThread, language, deadlineAt,
+      requestId: requestId!, intent: '', followUp: hasThread, language,
       ...(focusedDocumentId ? { focusDocumentId: focusedDocumentId } : {}),
       ...(elements.section.value ? { section: elements.section.value } : {}),
     });
@@ -357,6 +537,20 @@ async function ask(): Promise<void> {
     finishTiming();
     showNotice(errorText(error)); updateActions();
   }
+}
+
+async function nextQuestion(answerNow: boolean): Promise<void> {
+  if (switchingQuestion || taskStage !== 'active' || !activeTask) return;
+  switchingQuestion = true;
+  ++askEpoch; busy = false; pendingPhase = null; requestId = null;
+  finishTiming(); updateActions();
+  try {
+    audio.discardQueuedBefore(lastQuestionAt);
+    await window.peek.nextQuestion(lastQuestionAt);
+    clearThreadView(); showNotice('');
+  } catch (error) { showNotice(errorText(error)); return; }
+  finally { switchingQuestion = false; updateActions(); }
+  if (answerNow) await ask();
 }
 
 const audio = new RollingAudio({
@@ -398,9 +592,12 @@ elements.connectKey.addEventListener('click', () => { void openCredentials(); })
 elements.manageKey.addEventListener('click', () => { void openCredentials(); });
 
 elements.ask.addEventListener('click', () => { void ask(); });
-elements.newTopic.addEventListener('click', () => { clearThreadView(); showNotice(''); });
-elements.prepareToggle.addEventListener('click', () => setPreparation(elements.preparePanel.hidden));
-elements.prepareDone.addEventListener('click', () => setPreparation(false));
+elements.newTask.addEventListener('click', newTask);
+elements.tasksToggle.addEventListener('click', () => { void chooseTask(); });
+elements.hideWindow.addEventListener('click', () => { void window.peek.setVisible(false).catch((error: unknown) => showNotice(errorText(error))); });
+elements.newTopic.addEventListener('click', () => { void nextQuestion(false); });
+elements.prepareToggle.addEventListener('click', () => { if (elements.preparePanel.hidden) void setPreparation(true); else void startTask(); });
+elements.prepareDone.addEventListener('click', () => { void startTask(); });
 elements.cancel.addEventListener('click', () => {
   const epoch = ++askEpoch; pendingPhase = null; busy = false; requestId = null;
   finishTiming();
@@ -413,6 +610,7 @@ elements.cancel.addEventListener('click', () => {
   }).catch((error: unknown) => { if (epoch === askEpoch) showNotice(errorText(error)); });
 });
 elements.audioToggle.addEventListener('click', () => {
+  if (taskStage !== 'active' || !activeTask) return;
   if (audio.active) audio.stop();
   else if (!bootstrap?.transcriptionReady) { showNotice(t('noAudioKey')); void openCredentials(); }
   else void audio.start(bootstrap.config.inputDeviceId);
@@ -463,6 +661,7 @@ async function init(): Promise<void> {
   updateActions();
   try {
     bootstrap = await window.peek.bootstrap();
+    tasks = bootstrap.tasks;
     if (![...elements.model.options].some(option => option.value === bootstrap!.config.model)) {
       elements.model.add(new Option(bootstrap.config.model, bootstrap.config.model));
     }
@@ -471,6 +670,14 @@ async function init(): Promise<void> {
     updateLibrary(bootstrap.library);
     elements.askKey.textContent = displayShortcut(bootstrap.config.hotkeys.ask);
     updateLanguage();
+    if (bootstrap.activeTask) {
+      showSavedTask(bootstrap.activeTask);
+      await setPreparation(false);
+    } else {
+      taskStage = 'choose';
+      await window.peek.setPreparationMode(true);
+      renderTaskList();
+    }
     elements.shortcutWarning.textContent = bootstrap.shortcutWarnings.join(' ');
     elements.shortcutWarning.hidden = bootstrap.shortcutWarnings.length === 0;
     showNotice([...bootstrap.warnings, ...bootstrap.library.warnings].join(' '));

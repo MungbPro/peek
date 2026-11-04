@@ -1,7 +1,7 @@
-// One interaction budget, measured from Answer after listening has started.
+// Ten seconds is a responsiveness target, never an answer cancellation timer.
 export const FAST_LIMITS = {
-  turnMs: 10_000,
-  transcriptMs: 3_000,
+  targetMs: 10_000,
+  transcriptMs: 22_000,
   captureMs: 800,
   audioChunkMs: 2_000,
 } as const;

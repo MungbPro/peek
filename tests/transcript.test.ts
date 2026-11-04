@@ -25,3 +25,14 @@ test('out-of-order transcripts sort chronologically; clear removes all context',
   buffer.clear();
   assert.equal(buffer.recent(), '');
 });
+
+test('next question excludes prior and boundary-crossing clips without clearing the rolling recording', () => {
+  const buffer = new TranscriptBuffer(() => 100_000);
+  buffer.add({ startedAt: 80_000, endedAt: 84_000, text: 'abandoned question' });
+  buffer.add({ startedAt: 89_000, endedAt: 91_000, text: 'old question tail' });
+  buffer.add({ startedAt: 91_000, endedAt: 93_000, text: '下一题的新问题' });
+  assert.equal(buffer.recent(30, 90_000), '下一题的新问题');
+  buffer.add({ startedAt: 85_000, endedAt: 88_000, text: 'late old transcription' });
+  assert.equal(buffer.recent(30, 90_000), '下一题的新问题');
+  assert.match(buffer.recent(30), /abandoned question/);
+});

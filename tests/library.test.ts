@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { KnowledgeLibrary } from '../src/main/library.js';
+import { KnowledgeLibrary, type LibraryProgress } from '../src/main/library.js';
+import { performance } from 'node:perf_hooks';
 
 async function vault(files: Record<string, string>, run: (folder: string) => Promise<void>): Promise<void> {
   const folder = await mkdtemp(path.join(os.tmpdir(), 'peek-library-test-'));
@@ -129,20 +130,114 @@ test('invalid reload preserves a usable library, and oversize files are reported
   });
 });
 
-test('retrieves from a 100-article library with 10,000 words per article', async () => {
-  const files: Record<string, string> = {};
-  const paragraph = 'literature narrative memory character voice history context culture author reading ';
-  for (let index = 0; index < 100; index += 1) {
-    files[`Section ${index % 5}/article-${index}.md`] = `# Article ${index}\n${paragraph.repeat(1_000)}\nDistinct evidence articlemarker${index}.`;
-  }
-  await vault(files, async (folder) => {
+test('reports ordered discovery/index progress and committed metrics without exposing file contents', async () => {
+  const files = { 'A/first.md': '# Chinese\n叙事结构与时代记忆。', 'second.txt': 'Narrative evidence.', 'empty.md': '' };
+  await vault(files, async folder => {
     const library = new KnowledgeLibrary();
-    const status = await library.load(folder);
+    const events: LibraryProgress[] = [];
+    assert.equal(library.status().indexDurationMs, undefined);
+    const before = Date.now();
+    const status = await library.load(folder, progress => events.push(progress));
+    assert.ok(events.length > 2);
+    const indexing = events.filter(event => event.phase === 'index');
+    assert.deepEqual(indexing.map(event => event.completed), [0, 1, 2, 3]);
+    assert.ok(indexing.every(event => event.total === 3));
+    const scans = events.filter(event => event.phase === 'scan');
+    assert.ok(scans.every(event => event.completed === 0));
+    assert.ok(scans.every((event, index) => index === 0 || event.total >= scans[index - 1]!.total));
+    assert.equal(events.at(-1)?.phase, 'index');
+    assert.ok(events.every(event => Object.keys(event).sort().join(',') === 'completed,phase,total'));
+    assert.equal(status.documents.length, 2);
+    assert.equal(status.indexedBytes, Object.values(files).reduce((sum, value) => sum + Buffer.byteLength(value), 0));
+    assert.ok(Number.isFinite(status.indexDurationMs) && status.indexDurationMs! >= 0);
+    assert.ok(status.indexedAt! >= before && status.indexedAt! <= Date.now());
+    const prior = library.status();
+    await assert.rejects(library.load(path.join(folder, 'missing'), progress => events.push(progress)));
+    assert.deepEqual(library.status(), prior);
+    assert.ok(library.search('叙事结构').length);
+    // A renderer/IPC observer failing cannot discard successfully indexed data.
+    const reloaded = await library.load(folder, () => { throw new Error('observer disconnected'); });
+    assert.equal(reloaded.documents.length, 2);
+    assert.equal(reloaded.warnings.length, 0);
+  });
+});
+
+test('clearing for a different task removes old evidence and cancels pending index publication', async () => {
+  await vault({ 'one.md': 'privatepriorcontext', 'two.md': 'additionalcontext' }, async folder => {
+    const library = new KnowledgeLibrary();
+    const prior = await library.load(folder);
+    const priorId = prior.documents[0]!.id;
+    assert.ok(library.search('privatepriorcontext').length);
+    const next = await library.load(folder, progress => {
+      if (progress.phase === 'index' && progress.completed === 1) library.clear();
+    });
+    assert.equal(next.root, null);
+    assert.equal(next.documents.length, 0);
+    assert.equal(next.indexedAt, undefined);
+    assert.equal(library.resolveDocument(priorId), undefined);
+    assert.deepEqual(library.search('privatepriorcontext additionalcontext'), []);
+    assert.equal((await library.load(folder)).documents.length, 2);
+  });
+});
+
+test('discovery is bounded and reaching the document cap remains observable', async () => {
+  const files: Record<string, string> = {};
+  // Discovery and document limits must both terminate with visible warnings.
+  for (let index = 0; index < 10_002; index++) files[`article-${index}.md`] = `# Article ${index}\nEvidence.`;
+  await vault(files, async folder => {
+    const library = new KnowledgeLibrary();
+    const events: LibraryProgress[] = [];
+    const status = await library.load(folder, progress => events.push(progress));
+    assert.equal(status.documents.length, 2_000);
+    assert.ok(status.warnings.some(warning => warning.includes('Library limit')));
+    const last = events.at(-1)!;
+    assert.equal(last.total, 10_000);
+    assert.ok(status.warnings.some(warning => warning.includes('scan limited')));
+    assert.equal(last.completed, 2_001);
+    assert.ok(events.every(event => event.completed <= event.total));
+  });
+});
+
+test('retrieves from 100 diverse bilingual articles with at least 10,000 English words each', async t => {
+  const files: Record<string, string> = {};
+  const vocabulary = 'literature narrative memory character voice history context culture author reading identity migration archive testimony modernism realism metaphor irony dialogue silence rhythm translation reader witness agency landscape allegory ethics genre perspective narrator temporality symbolism ambiguity desire distance interpretation embodiment tradition intertextuality fragment sequence argument evidence language register speech representation structure materiality imagination community empire colonialism gender class ritual ecology realism reception literacy publication performance audience manuscript revision adaptation historical poetic rhetorical aesthetic comparative criticism canon vernacular displacement belonging testimony conflict reconciliation genealogy marginality subjectivity perception recollection uncertainty'.split(' ');
+  const chinese = ['叙事视角连接个人记忆与时代经验', '作品通过反讽揭示人物精神困境', '现代文学重新思考传统与社会变迁', '不同译本影响读者对文化意象的理解', '叙述距离让人物声音呈现多重层次', '地方经验与迁徙主题相互映照', '诗歌节奏与象征共同组织情感', '历史档案和个人见证构成复杂对话', '文学批评需要比较证据与解释', '文本结构中的留白引导读者参与'];
+  let characters = 0;
+  let chineseCharacters = 0;
+  for (let article = 0; article < 100; article += 1) {
+    let seed = article + 1;
+    const paragraphs: string[] = [];
+    for (let paragraph = 0; paragraph < 100; paragraph++) {
+      const words: string[] = [];
+      for (let word = 0; word < 100; word++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        // A larger synthetic lexicon stresses postings beyond repeated prose.
+        words.push(word % 3 === 0 ? `concept${seed % 20_000}` : vocabulary[seed % vocabulary.length]!);
+      }
+      const zh = chinese[(article + paragraph) % chinese.length]! + '；' + chinese[(article * 3 + paragraph * 7) % chinese.length]! + '。';
+      chineseCharacters += Array.from(zh.match(/\p{Script=Han}/gu) ?? []).length;
+      paragraphs.push(words.join(' ') + '.\n' + zh);
+    }
+    const text = `# Article ${article} 文学比较研究\n${paragraphs.join('\n\n')}\nDistinct evidence articlemarker${article}.`;
+    characters += text.length;
+    files[`Section ${article % 5}/article-${article}.md`] = text;
+  }
+  await vault(files, async folder => {
+    const library = new KnowledgeLibrary();
+    const events: LibraryProgress[] = [];
+    const status = await library.load(folder, progress => events.push(progress));
     assert.equal(status.documents.length, 100);
     assert.equal(status.warnings.length, 0);
     assert.ok(status.chunks > 1_000);
+    assert.equal(events.at(-1)?.completed, 100);
+    const queryStart = performance.now();
     const [hit] = library.search('articlemarker87');
+    const retrievalMs = performance.now() - queryStart;
     assert.ok(hit?.relativePath.endsWith('article-87.md'));
     assert.ok(hit.text.includes('articlemarker87'));
+    const broadQueryStart = performance.now();
+    assert.ok(library.search('叙事视角 人物精神困境 memory narrative interpretation').length > 0);
+    const broadQueryMs = performance.now() - broadQueryStart;
+    t.diagnostic(JSON.stringify({ synthetic: true, articles: 100, englishWordsAtLeast: 1_000_000, chineseCharacters, characters, indexedBytes: status.indexedBytes, passages: status.chunks, indexDurationMs: status.indexDurationMs, uniqueMarkerQueryMs: Number(retrievalMs.toFixed(2)), broadBilingualQueryMs: Number(broadQueryMs.toFixed(2)) }));
   });
 });

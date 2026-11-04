@@ -18,7 +18,7 @@
 
 Peek 使用你自己的 OpenAI API key 和 API 组织额度。ChatGPT 订阅本身不会配置 Peek；符合条件的 Pro/Business 用户可按官方说明领取并关联 [API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)。密钥可从 [OpenAI API Platform](https://platform.openai.com/api-keys) 创建。
 
-首次使用时允许麦克风和屏幕录制。密钥管理会暂停正在进行的回答和音频。保存后先开启收音，听完问题再按一次 `Control + Enter` 获取回答；对话中不用输入文字。未配置 key 时仍可查看本地资料库。
+首次使用时允许麦克风和屏幕录制。密钥管理会暂停正在进行的回答和音频。保存后新建或继续任务，完成准备并开启收音；听完问题再按一次 `Control + Enter` 获取回答；对话中不用输入文字。未配置 key 时仍可查看本地资料库。
 
 开发者从源码启动需要 Node.js 22.12+ 和 npm，同样可以在窗口中输入 key：
 
@@ -31,24 +31,34 @@ npm run dev
 
 ## 对话时怎么用
 
-开始前，在“准备”中选择文库、主讲文章和模型，并确认正在收音。对方说完问题后，按 **`Control + Enter`**，或按住 `Shift` 点击大的回答按钮。Peek 会结合最近语音、截图和相关资料作答。
+每次启动先显示任务选择，可以直接点击：选择「新任务」，在「准备」中选文库、主讲文章和模型，等索引完成后点「开始任务」；或点击已有任务的「继续」，恢复文章选择与历史问答。准备界面可直接操作，进入对话后才需要按住 `Shift` 点击浮窗。
 
-接着交流，再按同一个快捷键即可追问，不用区分“提问”和“追问”。换一个话题时点击“新话题”，清除此前的问答线程。对话界面没有问题输入框。
+确认已开启收音。对方说完问题后，按 **`Control + Enter`**，或按住 `Shift` 点击大的回答按钮。Peek 会结合最近语音、截图和相关资料作答。
+
+接着交流，再按同一个快捷键即可追问，不用区分“提问”和“追问”。换一个话题时点击“新话题”，重置本次追问上下文，已保存的任务历史仍保留。另一场访谈或演讲可从「任务」新建独立任务。对话界面没有问题输入框。
+
+如果老师已经换到下一题，而旧答案还在生成：等新问题说完，再按 **`Control + Enter`** 或点击 **「下一题」**。Peek 会取消未完成的旧回答，清除旧追问上下文，再用新增语音回答新问题。收音持续进行，无需先暂停或重新开启；已经完成的任务历史仍保留。
 
 | 操作 | macOS 默认按键 |
 | --- | --- |
-| 根据当前对话回答；再次按下继续追问 | `Control + Enter` |
-| 隐藏 / 显示 | `Control + Backspace` |
+| 根据当前对话回答；生成中再次按下切到下一题 | `Control + Enter` |
+| 隐藏 / 回来 | `Control + Backspace`；再按一次回来 |
 | 临时允许鼠标点击 | 按住 `Shift` |
-| 清除之前的问答 | 点击“新话题” |
+| 重置本次追问上下文 | 点击“新话题”；不删除历史 |
 
-收音不会随启动自动开始；如果尚未收音，第一次按主按钮只开启收音；说完问题后再按一次，才会请求回答。Peek 不会仅因为检测到语音就自动生成回答。按下回答会提交尚未结束的音频片段，最多等 3 秒取得转写；未完成时会提示稍后再按，本次不会请求模型回答。
+收音不会随启动自动开始；如果尚未收音，第一次按主按钮只开启收音；说完问题后再按一次，才会请求回答。Peek 不会仅因为检测到语音就自动生成回答。按下回答会提交当前音频片段并等待这次转写；超过 10 秒仍会继续等待，不会仅因超过响应目标而丢弃问题。转写失败、请求超时或队列跟不上时会提示重试，不会把旧转写当成本次问题。
 
-`Enter` 是回车键；`Backspace` 是 Mac 上标为 `delete` 或 `⌫` 的删除键。窗口为 420 × 520，默认在主屏右上角置顶并鼠标穿透。松开 `Shift` 后恢复穿透。隐藏不会暂停音频，提问会重新显示浮窗。菜单栏 Peek 图标也可回答、显示/隐藏、管理密钥、打开配置或退出。Windows 使用相同默认按键，实机行为尚未完整验证。
+`Enter` 是回车键；`Backspace` 是 Mac 上标为 `delete` 或 `⌫` 的删除键。窗口为 420 × 520，默认在主屏右上角置顶并鼠标穿透。松开 `Shift` 后恢复穿透。隐藏不会暂停音频，提问会重新显示浮窗。也可点击「隐藏」按钮。隐藏后，从屏幕顶部菜单栏 Peek 小眼睛图标选择 **「显示 Peek / Show Peek」** 即可回来，选择「退出」才关闭应用。菜单栏还可回答、管理密钥或打开配置。Windows 使用相同默认按键，实机行为尚未完整验证。
 
 默认不占用 Option 组合键。单独的 `followUp` 快捷键默认为空，使用同一个提问快捷键即可继续追问。升级会自动迁移 v0.1.0、v0.1.1 完全匹配的旧默认按键，自定义按键保持不变。
 
-快捷键注册失败时，浮窗持续显示提示，也不会把失败按键显示为可用；请先用菜单栏的「回答」或「显示/隐藏」。任何默认按键仍可能与其他应用冲突，可通过托盘打开配置修改后重启。
+快捷键注册失败时，浮窗持续显示提示，也不会把失败按键显示为可用；请先用菜单栏的「回答」或「显示 Peek」。任何默认按键仍可能与其他应用冲突，可通过托盘打开配置修改后重启。
+
+### 任务与历史
+
+任务保存所选文库路径、主文章、搜索范围和模型。完成的问答自动保存在本机，展开「历史」查看；下次启动选择「继续」即可恢复。切换任务会暂停收音，请检查文章和设备后再开启。
+
+macOS 文件位置为 `~/Library/Application Support/Peek/tasks/<任务ID>.json`。这是本地明文 JSON，包含实际提交的提问文字（可能来自最近一段语音转写）、成功回答、时间、模型及来源路径/行号。不会保存录音、截图、原始连续转写缓冲或全文索引；请求失败或手动停止留下的文字不记入成功问答历史；换到下一题会移走旧的未完成回答。应用没有云同步，请把任务文件也视为私人资料。
 
 ### 模型与等待时间
 
@@ -58,7 +68,7 @@ npm run dev
 
 收音期间，每 2 秒提交一个可独立解码的 WebM 片段，用 `gpt-transcribe` 做文件转写。它是滚动提交短录音，未实现 Realtime WebSocket 语音识别；仍可能漏字或延迟。参见 [OpenAI 文件转写说明](https://developers.openai.com/api/docs/guides/speech-to-text)。
 
-已开启收音后，从按下提问到结束使用 **10 秒总等待预算**：最新转写最多等 3 秒，截图最多等 800 毫秒，剩余时间用于回答。超过总预算会取消请求和后续流式输出，保留已收到的文字并标为未完成，可再次提问重试。**这是应用的等待上限，不是 10 秒内必定得到完整答案的保证**；网络、权限和提供方速度仍会影响结果。
+**10 秒是响应目标。** 超过 10 秒会显示仍在等待，回答继续生成；您可以等它完成，或点击「停止」主动取消。当前转写完成后再发送问题；截图最多等 800 毫秒，失败时可继续用语音和文章回答。请求仍有独立的超时保护，网络或提供方失败时会提示重试；10 秒内得到完整答案并无保证。
 
 ### 提问报错
 
@@ -68,16 +78,20 @@ v0.1.1 会把 Electron 返回的部分截图错误显示成 `An unexpected error
 
 ## Obsidian：主文章 + 相关资料
 
-1. 演讲或对话开始前展开“准备”，选择 Obsidian vault 文件夹。直接读取 `.md`、`.markdown`、`.txt`，不复制或修改原文。
+1. 演讲或对话开始前新建或继续任务，展开“准备”，选择 Obsidian vault 文件夹。直接读取 `.md`、`.markdown`、`.txt`，不复制或修改原文。
 2. 在下拉列表选当前主讲文章，不用打字搜索。保留“全部资料库”范围，Peek 会优先选取主文章段落，同时寻找其他文章中的相关证据。
-3. 需要缩小范围时选一个章节。章节对应 vault 的第一层文件夹；章节过滤会限制检索范围。准备好后收起面板。
+3. 需要缩小范围时选一个章节。章节对应 vault 的第一层文件夹；章节过滤会限制检索范围。准备好后点击「开始任务」或「完成」。
 4. 回答后展开来源，查看文件路径、原文行号和摘录；点击来源可打开文章。Obsidian 改完文件后点击重新载入。
 
 回答先围绕主文章，再关联资料库证据。模型也可补充一般文学背景，提示词要求把这部分标为“常识 / Background”；它并不等于资料库中的已核实结论。
 
-这是本地词汇检索，不会每次把百万字全文发送给模型。默认每次最多提供 6 个段落、12,000 字符。索引仅在内存中，退出后重建。英文词汇和中文相邻字词均可检索，但不会自动把跨语言同义词对应起来。建议在笔记中加入双语关键词，例如 `叙事视角 / narrative perspective`。
+文库应在上台前准备：启动时先显示任务选择，不会先扫描全部资料；选择文库、继续带文库的任务或点击「刷新」时才建立索引。界面显示查找/索引进度，完成后显示文章数、段落数和耗时。每次提问直接查询已建立的内存索引，不会重新读取全部文章。退出后索引消失，下次继续任务会重建；原文修改后需刷新。
 
-可读取 100 篇长文；当前上限为单文件 10 MB、总计 100 MB、2,000 篇或 60,000 个段落。隐藏文件夹、`.obsidian`、`node_modules` 和符号链接会跳过。PDF、扫描件、图片附件、Obsidian 插件生成的动态内容需要先导出为文本。
+一次本机合成测试包含 100 篇各至少 10,000 个英文词的文章，另加 286,000 个中文字，共约 11.54 MB；建立索引用了约 0.65 秒，一次中英混合检索约 11 毫秒。这是测试数据与本机测量，不能保证真实文库、磁盘或另一台 Mac 的速度。准备时以实际进度与耗时为准；这一步在现场提问之前完成，不影响本次提问计时。
+
+这是本地词汇检索，不会每次把百万字全文发送给模型。默认每次最多提供 6 个段落、12,000 字符。索引仅在内存中，退出后需重新加载。英文词汇和中文相邻字词均可检索，但不会自动把跨语言同义词对应起来。建议在笔记中加入双语关键词，例如 `叙事视角 / narrative perspective`。
+
+可读取 100 篇长文；扫描最多收集 10,000 个候选文件；索引上限为单文件 10 MB、总计 100 MB、2,000 篇或 60,000 个段落。隐藏文件夹、`.obsidian`、`node_modules` 和符号链接会跳过。PDF、扫描件、图片附件、Obsidian 插件生成的动态内容需要先导出为文本。
 
 ## macOS 权限与音频
 
@@ -182,7 +196,7 @@ npm run package:mac:x64    # Intel
 
 macOS 安装包未签名、未公证；首次打开可能需要在系统设置中允许。分别生成两个架构的构建，不表示已在两种真实机器上完成麦克风、屏幕共享和音频路由测试。原生平台代码集中在 `src/main/platform.ts`。
 
-输入的 API key 会短暂存在于独立、沙盒化的设置窗口，通过受限 IPC 交给主进程后清空。已保存的密钥不会回传到界面；解密与 API 请求均在主进程完成。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引、对话和滚动转写仅在内存中，应用不主动把音频写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交密钥文件或私人 vault。
+输入的 API key 会短暂存在于独立、沙盒化的设置窗口，通过受限 IPC 交给主进程后清空。已保存的密钥不会回传到界面；解密与 API 请求均在主进程完成。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引与滚动转写缓冲仅在内存中；成功问答和任务设置保存为本地 JSON。应用不主动把音频或截图写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交密钥文件或私人 vault。
 
 验证需覆盖本地逻辑、实际 Electron 启动与隔离、中文/英文界面、模拟问答与追问、音频分块，以及密钥保存、删除和不可用状态。测试使用模拟服务与合成数据；真实 API、实体麦克风、屏幕录制授权和观众端隐藏仍需实测。各版本的具体结果见发布说明。
 
@@ -196,17 +210,23 @@ Saved credentials are encrypted with Electron `safeStorage` in `credentials.enc`
 
 For source development, use Node.js 22.12+, run `npm install` and `npm run dev`, then use the same key window. Existing `.env` setups remain optional; saved app credentials take precedence. Grant Microphone and Screen Recording permissions when requested. Opening key management pauses active answers and audio. Recording starts only after an explicit audio or answer action, including after a normal launch; the audio button pauses it.
 
-Before the conversation, choose a vault, article, and model from the **Prepare** dropdowns and start listening. After a spoken question, press **Control+Enter** for an answer. Press the same shortcut for subsequent follow-ups; **New topic** clears the previous Q&A thread. There is no question textbox. If audio is off, the first press starts listening; press again after the question to request an answer. Speech alone never triggers an answer. Pressing Answer flushes the current clip and waits up to three seconds for transcription. If it is not ready, Peek asks you to press again later and does not call the model for that press.
+Every launch begins with the task chooser. Click **New task**, choose a vault, article, and model in **Prepare**, wait for indexing, then choose **Start task**. Or click **Continue** on a saved task to restore its setup and Q&A history. Task selection and preparation are directly clickable; hold Shift for clicks during the conversation. Start listening after preparation. After a spoken question, press **Control+Enter** for an answer. Press the same shortcut for subsequent follow-ups; **New topic** resets the current follow-up context without deleting saved history. Use **Tasks** to start a separate interview or presentation. There is no question textbox. If audio is off, the first press starts listening; press again after the question to request an answer. Speech alone never triggers an answer. Pressing Answer flushes the current clip and waits for its transcription, continuing past the ten-second target. Failed or timed-out transcription, or a queue falling behind, can require a retry; an older transcript does not satisfy the current question.
 
-Hold **Shift** to click the overlay. **Control+Backspace** toggles visibility (`Backspace` is the Mac key labelled `delete` or `⌫`); hiding does not pause audio, and asking shows the overlay again. The tray also provides **Answer**, **Show/Hide**, and **Quit**. Windows uses the same default keys, with hardware behavior still unverified. The separate `followUp` shortcut defaults to an empty string because the main shortcut already continues the thread. Upgrades migrate exact v0.1.0/v0.1.1 defaults while preserving customized shortcuts.
+If the teacher moves on while an old answer is still generating, wait for the new question to finish, then press **Control+Enter** again or click **Next question**. Peek cancels the unfinished answer, clears its follow-up context, and answers from newly heard speech. Recording continues without restarting the microphone, and completed task history remains saved.
+
+Hold **Shift** to click the overlay. **Control+Backspace** toggles visibility (`Backspace` is the Mac key labelled `delete` or `⌫`); hiding does not pause audio, and asking shows the overlay again. Press the same shortcut again to return, or choose **Show Peek** from the menu-bar eye icon. The overlay also has a **Hide** button; **Quit** in the tray exits the app. The tray provides **Answer** as a fallback. Windows uses the same default keys, with hardware behavior still unverified. The separate `followUp` shortcut defaults to an empty string because the main shortcut already continues the thread. Upgrades migrate exact v0.1.0/v0.1.1 defaults while preserving customized shortcuts.
 
 No Option combination is registered by default. Failed shortcut registrations remain visible as warnings and are not advertised as active; use the tray actions until you change the conflicting binding in config and restart. Other applications may still reserve the new defaults.
 
 If screen capture fails, Peek explicitly says no screenshot was used and continues with speech and library context. Check Screen Recording permission for Peek in System Settings, then quit and restart after granting it. Capture can also fail for other OS/display reasons. Version 0.1.1 masked some native capture errors as `An unexpected error occurred.`; v0.1.2 identifies the failing stage and gives a relevant action. An answer without a screenshot cannot reliably interpret screen-only content.
 
-The model picker defaults to **Sol (`gpt-6.1-sol`)** and also offers **Astra (`gpt-6-astra`)**. Changes save immediately without restarting. Both OpenAI profiles use Chat Completions with `reasoning_effort: "low"` and `service_tier: "fast"`. Fast mode costs more than Standard; Peek shows the actual service tier when returned. It never switches to a different model to meet the time budget. The picker is enabled only for the official OpenAI endpoint (`https://api.openai.com/v1`); custom models/providers remain available through config. Model selection does not replace endpoints or keys. See the [model guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.1-sol) and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
+The model picker defaults to **Sol (`gpt-6.1-sol`)** and also offers **Astra (`gpt-6-astra`)**. Changes save immediately without restarting. Both OpenAI profiles use Chat Completions with `reasoning_effort: "low"` and `service_tier: "fast"`. Fast mode costs more than Standard; Peek shows the actual service tier when returned. It never switches to a different model to meet the response target. The picker is enabled only for the official OpenAI endpoint (`https://api.openai.com/v1`); custom models/providers remain available through config. Model selection does not replace endpoints or keys. See the [model guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.1-sol) and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
 
-Audio is sent as independent two-second WebM files to `gpt-transcribe`; this is rolling file transcription, not Realtime WebSocket speech recognition. Once listening, each Answer action has a ten-second total waiting budget, including up to three seconds for the latest transcript and 800 milliseconds for screenshot capture. At the deadline, Peek cancels the request and further streaming, keeps any received text marked incomplete, and allows a retry. This limits waiting; it does not guarantee a complete successful answer within ten seconds. See [file transcription](https://developers.openai.com/api/docs/guides/speech-to-text).
+Audio is sent as independent two-second WebM files to `gpt-transcribe`; this is rolling file transcription, not Realtime WebSocket speech recognition. Ten seconds is a response target. Crossing it shows that Peek is still waiting while generation continues; wait for completion or choose Stop to cancel. Peek waits for the current transcription before sending the question. Screenshot waiting is capped at 800 milliseconds; a missing image still permits an answer from speech and articles. Independent request timeouts and network/provider errors can still stop a request and require a retry. A complete successful answer within ten seconds is not guaranteed. See [file transcription](https://developers.openai.com/api/docs/guides/speech-to-text).
+
+Completed question/answer pairs are saved in local plaintext task JSON files under `userData/tasks/`. They include the question actually sent (possibly text from the recent spoken context), answer, model, timestamps, source paths/line numbers, and task setup. The continuous transcript buffer, audio, screenshots and full-text index are not persisted. Incomplete answers are not saved as successful history. Expand **History** to review saved turns and choose **Continue** at the next launch; opening the task chooser pauses audio. There is no cloud sync.
+
+Prepare the library before presenting. Choosing a vault, continuing a task with a vault, or choosing Reload builds the in-memory index with visible progress and completion metrics. Asking uses that ready index; it does not reindex every article. Restarting requires a new load, and source edits require Reload. A local synthetic test of 100 long articles (at least one million English words plus 286,000 Chinese characters, about 11.54 MB) indexed in about 0.65 seconds and completed one broad bilingual query in about 11 milliseconds. This is not a real-vault or cross-device speed guarantee. Index preparation happens before live questions and their response timing.
 
 Choose the article before presenting and leave the scope on the whole library to include supporting sources. A section filter narrows retrieval. Sources include paths and line numbers. Reload after editing notes. Retrieval is lexical: bilingual aliases help, but cross-language synonyms are not automatically translated.
 
