@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="88" viewBox="0 0 260 88" role="img" aria-labelledby="title">
+  <title id="title">Intel 芯片 → x64 · 下载 DMG</title>
+  <rect x="1" y="1" width="258" height="86" rx="13" fill="#172331" stroke="#507496" stroke-width="2"/>
+  <g stroke="#b7d8f7" stroke-width="2" stroke-linecap="round">
+    <rect x="24" y="26" width="36" height="36" rx="6" fill="#243d54"/>
+    <path d="M32 20v6m10-6v6m10-6v6M32 62v6m10-6v6m10-6v6M18 34h6m-6 10h6m-6 10h6M60 34h6m-6 10h6m-6 10h6"/>
+  </g>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <text x="42" y="48" text-anchor="middle" fill="#e4f1ff" font-size="12" font-weight="700">intel</text>
+    <text x="82" y="37" fill="#edf5ff" font-size="17" font-weight="700">Intel 芯片 → x64</text>
+    <text x="82" y="61" fill="#b7d8f7" font-size="14">下载 DMG</text>
+  </g>
+  <path d="M232 52v11m-4-4 4 4 4-4m-10 7h12" fill="none" stroke="#b7d8f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,11 +1,12 @@
 # Peek
 
-1. 填 API 密钥并授权麦克风、屏幕录制；选「新任务」或「继续」，准备文库、文章、模型后开启音频。
-2. Ctrl+回车提问；生成中再按换题。按住 Shift 点击。
-3. Ctrl+⌫ 隐藏，再按回来；菜单栏 Peek→显示 Peek／退出。
+自备 **OpenAI API 密钥**，ChatGPT 会员不能代替。选任务，开启音频。Ctrl+回车提问／切题；Shift 点击。Ctrl+⌫ 隐藏／回来；菜单栏退出。
 
-问答保存在本机；隐藏不停收音。共享不保证隐藏，请检查观众端。
+[![M 系列芯片 → arm64 · 下载 DMG](docs/download-arm64.svg)](https://github.com/MungbPro/peek/releases/download/v0.1.2/Peek-0.1.2-macOS-arm64-unsigned.dmg)
+[![Intel 芯片 → x64 · 下载 DMG](docs/download-x64.svg)](https://github.com/MungbPro/peek/releases/download/v0.1.2/Peek-0.1.2-macOS-x64-unsigned.dmg)
 
-[下载预览版](https://github.com/MungbPro/peek/releases/tag/v0.1.2)：M 系列选 arm64，Intel 选 x64，安装 DMG（未签名）。
+苹果菜单→关于本机：看芯片／处理器，别按年份选。
 
-[详细说明](GUIDE.md) · [限制](HONESTY.md)
+**未签名、未公证。** 确认来源后，先打开一次，再到「系统设置→隐私与安全性→仍要打开」。[步骤](GUIDE.md#首次打开)
+
+共享不保证隐藏。[说明](GUIDE.md) · [限制](HONESTY.md)

@@ -4,7 +4,15 @@
 
 [下载 macOS 预览版 / Downloads](https://github.com/MungbPro/peek/releases) · [English](#english-quick-guide)
 
+**当前默认版本需要自备 OpenAI API 密钥。ChatGPT 会员不能代替 API 密钥；使用前还需确认 API 账户可用。**
+
+下载前打开屏幕左上角 **苹果菜单  → 关于本机**：若“芯片”显示 Apple M 系列，选 [arm64 安装包](https://github.com/MungbPro/peek/releases/download/v0.1.2/Peek-0.1.2-macOS-arm64-unsigned.dmg)；若“处理器”显示 Intel，选 [x64 安装包](https://github.com/MungbPro/peek/releases/download/v0.1.2/Peek-0.1.2-macOS-x64-unsigned.dmg)。Apple 从 2020 年末的部分机型开始转向 Apple 芯片，不能只按购买或生产年份判断。参见 [Apple 芯片识别说明](https://support.apple.com/zh-cn/116943)。
+
 **屏幕共享时不保证隐藏。** 上台前请用实际投屏、录屏或会议软件检查观众端画面。已知限制见 [HONESTY.md](HONESTY.md)。
+
+## 首次打开
+
+**首次打开提醒：当前预览版未签名、未公证。** “无法验证开发者”或“Apple 无法检查是否包含恶意软件”是 macOS Gatekeeper 提示。仅从[本项目官方 Releases](https://github.com/MungbPro/peek/releases) 下载；确认信任来源后，先尝试打开一次，再到 **系统设置 → 隐私与安全性 → 仍要打开**，按提示确认。若提示“将损坏你的电脑”或“已损坏”，不要强行打开，先停止使用并核对下载。参见 [Apple 首次打开说明](https://support.apple.com/zh-cn/102445)。
 
 ## 60 秒开始
 
@@ -194,7 +202,11 @@ npm run package:mac:arm64  # Apple Silicon
 npm run package:mac:x64    # Intel
 ```
 
-macOS 安装包未签名、未公证；首次打开可能需要在系统设置中允许。分别生成两个架构的构建，不表示已在两种真实机器上完成麦克风、屏幕共享和音频路由测试。原生平台代码集中在 `src/main/platform.ts`。
+macOS 安装包未签名、未公证；首次打开请按上方提示处理。分别生成两个架构的构建，不表示已在两种真实机器上完成麦克风、屏幕共享和音频路由测试。原生平台代码集中在 `src/main/platform.ts`。
+
+### 发布签名
+
+当前构建环境只有 Apple Development 签名身份，没有用于公开分发的 Developer ID Application 证书。正式分发需要 Apple Developer Program 资格、Developer ID Application 证书及对应私钥：启用 Hardened Runtime 并签名，使用发布者的公证凭据提交 Apple 公证，成功后用 `stapler` 附加公证票据，再验证安装包。开发签名不能替代这套发布流程；本次未完成签名或公证。参见 [Apple Developer ID](https://developer.apple.com/developer-id/) 和[公证流程](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
 
 输入的 API key 会短暂存在于独立、沙盒化的设置窗口，通过受限 IPC 交给主进程后清空。已保存的密钥不会回传到界面；解密与 API 请求均在主进程完成。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引与滚动转写缓冲仅在内存中；成功问答和任务设置保存为本地 JSON。应用不主动把音频或截图写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交密钥文件或私人 vault。
 
@@ -204,7 +216,11 @@ macOS 安装包未签名、未公证；首次打开可能需要在系统设置�
 
 Peek is a local desktop overlay for screen context, recent speech, and an Obsidian Markdown library. The UI defaults to Chinese; click `中 / EN` for this session, or set `language` to `en` in the tray-opened config for an English default. It uses OpenAI API keys, not ChatGPT sign-in.
 
+**The default build requires your own OpenAI API key. A ChatGPT subscription does not replace that key.** To choose a download, open **Apple menu → About This Mac**: an Apple M-series **Chip** means `arm64`; an Intel **Processor** means `x64`. Check the displayed hardware instead of relying on the year. See [Apple’s identification guide](https://support.apple.com/en-au/116943).
+
 Download the `arm64` build for an M-series Mac or `x64` for Intel. The first-run key window is directly clickable: paste your key, choose **Verify and save**, then **Done**. **Save only** skips the network check. No `.env` editing or restart is required. The tray’s API key item lets you replace or remove it later. Verification checks connection/authentication only, not billing, model calls, or speech permissions.
+
+**First launch: this preview is unsigned and unnotarized.** An unidentified-developer or cannot-check-for-malware alert comes from macOS Gatekeeper. Download only from the [official repository Releases](https://github.com/MungbPro/peek/releases). If you trust the source, try opening once, then use **System Settings → Privacy & Security → Open Anyway** and confirm. Do not force open an app flagged as damaged or harmful; stop and verify the download. See [Apple’s opening instructions](https://support.apple.com/zh-cn/102445).
 
 Saved credentials are encrypted with Electron `safeStorage` in `credentials.enc`. macOS protects the encryption key in Keychain; Windows uses DPAPI. Peek refuses plaintext fallback. Input briefly exists in the isolated setup renderer and is cleared after submission; stored keys are never returned to the renderer. Removing a key also disables its old environment fallback in Peek, but does not revoke it at the provider or edit an existing `.env`.
 
@@ -232,4 +248,6 @@ Choose the article before presenting and leave the scope on the whole library to
 
 For other-party playback audio, route output through a BlackHole multi-output device plus headphones, then select BlackHole’s input ID in config. Microphone mixing requires separate routing. Chat can use a compatible Qwen-VL endpoint; transcription is configured independently. No web search is implemented.
 
-Use the build, test, and architecture-specific packaging commands above. Builds are unsigned. Screen-share exclusion is best effort and must be checked on the actual audience output. See [HONESTY.md](HONESTY.md) for limits and verification gaps.
+Use the build, test, and architecture-specific packaging commands above. Only an Apple Development identity is currently available in the build environment; it cannot replace a Developer ID Application identity for public distribution. Release signing requires Apple Developer Program membership, a Developer ID Application certificate with its private key, Hardened Runtime signing, notarization using the publisher’s credentials, and stapling the accepted ticket. No signed or notarized release is claimed. See [Developer ID](https://developer.apple.com/developer-id/) and [Apple’s notarization workflow](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+Screen-share exclusion is best effort and must be checked on the actual audience output. See [HONESTY.md](HONESTY.md) for limits and verification gaps.
