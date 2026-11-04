@@ -12,6 +12,10 @@ export interface AudioCallbacks {
   status: (state: AudioState, message?: string) => void;
   devices: (devices: MediaDeviceInfo[]) => void;
 }
+export interface AudioOptions {
+  chunkMilliseconds?: number;
+  flushTimeoutMilliseconds?: number;
+}
 
 /** Each recorder lifetime produces one complete, independently decodable WebM file. */
 export class RollingAudio {
@@ -25,16 +29,26 @@ export class RollingAudio {
   private pendingClips = new Set<Clip>();
   private processing = false;
   private failures = 0;
+  private latestError: string | null = null;
+  private readonly chunkMilliseconds: number;
+  private readonly flushTimeoutMilliseconds: number;
 
-  constructor(private readonly callbacks: AudioCallbacks) {}
+  constructor(private readonly callbacks: AudioCallbacks, options: AudioOptions = {}) {
+    this.chunkMilliseconds = options.chunkMilliseconds ?? 5000;
+    this.flushTimeoutMilliseconds = options.flushTimeoutMilliseconds ?? 7000;
+    if (!Number.isInteger(this.chunkMilliseconds) || this.chunkMilliseconds < 250 || this.chunkMilliseconds > 15_000) throw new Error('Audio chunks must be between 250 and 15,000 milliseconds.');
+    if (!Number.isInteger(this.flushTimeoutMilliseconds) || this.flushTimeoutMilliseconds < 1 || this.flushTimeoutMilliseconds > 10_000) throw new Error('Audio flush timeout must be between 1 and 10,000 milliseconds.');
+  }
 
   get active(): boolean { return this.wanted; }
+  get lastError(): string | null { return this.latestError; }
 
   async start(deviceId: string): Promise<void> {
     if (this.wanted) return;
     this.wanted = true;
     const generation = ++this.generation;
     this.failures = 0;
+    this.latestError = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -69,6 +83,7 @@ export class RollingAudio {
 
   stop(): void {
     this.cleanup();
+    this.latestError = null;
     this.callbacks.status('idle', 'Audio paused. The rolling transcript has been cleared.');
   }
 
@@ -97,7 +112,7 @@ export class RollingAudio {
       };
       return await Promise.race([
         ready(),
-        new Promise<boolean>(resolve => { deadline = setTimeout(() => resolve(false), 7000); }),
+        new Promise<boolean>(resolve => { deadline = setTimeout(() => resolve(false), this.flushTimeoutMilliseconds); }),
       ]);
     } finally {
       if (deadline) clearTimeout(deadline);
@@ -121,6 +136,7 @@ export class RollingAudio {
 
   private fail(message: string): void {
     this.cleanup();
+    this.latestError = message;
     this.callbacks.status('error', message);
   }
 
@@ -170,11 +186,11 @@ export class RollingAudio {
           if (generation === this.generation) this.fail(`Could not read the recorded audio: ${String(error)}`);
         });
       });
-      // Do not use start(5000): later timeslice blobs can lack WebM headers.
+      // Do not use start(timeslice): later blobs can lack WebM headers.
       recorder.start();
       this.timer = setTimeout(() => {
         if (recorder.state === 'recording') recorder.stop();
-      }, 5000);
+      }, this.chunkMilliseconds);
     } catch (error) {
       this.fail(error instanceof Error ? error.message : String(error));
     }
@@ -191,6 +207,7 @@ export class RollingAudio {
           await this.callbacks.transcribe(item.chunk);
           if (item.clip.generation === this.generation && this.wanted) {
             this.failures = 0;
+            this.latestError = null;
             this.callbacks.status('recording', this.stream?.getAudioTracks()[0]?.label || 'Listening');
             item.clip.settle(true);
           } else {
@@ -200,7 +217,8 @@ export class RollingAudio {
           item.clip.settle(false);
           if (item.clip.generation !== this.generation || !this.wanted) continue;
           ++this.failures;
-          const detail = error instanceof Error ? error.message : String(error);
+          const detail = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+          this.latestError = detail;
           if (this.failures >= 3) this.fail(`Transcription paused after three failures: ${detail}`);
           else this.callbacks.status('recording', `Transcription failed; retrying with the next chunk. ${detail}`);
         }

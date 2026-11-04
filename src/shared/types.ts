@@ -12,9 +12,9 @@ export interface PublicConfig {
 }
 export interface Bootstrap {
   config: PublicConfig; library: LibraryStatus; chatReady: boolean;
-  transcriptionReady: boolean; warnings: string[];
+  transcriptionReady: boolean; warnings: string[]; shortcutWarnings: string[]; modelSelectionAvailable: boolean;
 }
-export interface AskRequest { intent: string; followUp: boolean; focusDocumentId?: string; section?: string; language?: 'zh' | 'en' }
+export interface AskRequest { requestId: string; intent: string; followUp: boolean; focusDocumentId?: string; section?: string; language?: 'zh' | 'en'; deadlineAt?: number }
 export interface AudioChunk { data: ArrayBuffer; mimeType: string; startedAt: number; endedAt: number }
 export type AudioStatus = { state: 'idle' | 'recording' | 'error'; message?: string };
 export type PeekEvent =
@@ -24,6 +24,8 @@ export type PeekEvent =
   | { type: 'answer-delta'; requestId: string; delta: string }
   | { type: 'answer-done'; requestId: string }
   | { type: 'answer-error'; requestId: string; message: string }
+  | { type: 'answer-warning'; requestId: string; message: string }
+  | { type: 'answer-metadata'; requestId: string; serviceTier: string }
   | { type: 'warning'; message: string }
   | { type: 'credentials-changed'; chatReady: boolean; transcriptionReady: boolean }
   | { type: 'library'; library: LibraryStatus };
@@ -37,6 +39,7 @@ export interface PeekApi {
   openSource(documentId: string): Promise<void>;
   audioStatus(status: AudioStatus): Promise<void>;
   openCredentials(): Promise<void>;
+  setModel(model: string): Promise<string>;
   onEvent(listener: (event: PeekEvent) => void): () => void;
 }
 export interface CredentialTarget {

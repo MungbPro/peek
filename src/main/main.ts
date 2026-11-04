@@ -1,11 +1,15 @@
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
-import { defaultConfig, loadConfig, publicConfig, saveConfig, type Config } from './config';
-import { configureApplication, configureOverlay, credentialEncryptionBackend, getConfigDirectory, platformDefaults, startModifierMonitor } from './platform';
+import { defaultConfig, isOfficialOpenAIEndpoint, loadConfig, publicConfig, saveConfig, type Config } from './config';
+import { configureApplication, configureOverlay, credentialEncryptionBackend, getConfigDirectory, platformDefaults, screenRecordingDenied, startModifierMonitor } from './platform';
+import { registerShortcuts, type ShortcutName } from './shortcuts';
+import { operationError } from './errors';
+import { abortable } from './abortable';
+import { FAST_LIMITS } from '../shared/timing';
+import { isOpenAILiveModel } from '../shared/models';
 import { KnowledgeLibrary } from './library';
 import { TranscriptBuffer } from './transcript';
 import { contextText, hasKey, setCredentialResolver, streamAnswer, systemPrompt, transcribeAudio, type ChatMessage } from './provider';
@@ -33,6 +37,7 @@ let stopMonitor: (() => void) | undefined;
 let transcriptTimer: ReturnType<typeof setInterval> | undefined;
 let desiredVisible = true;
 let capturing = false;
+let hidingForCapture = false;
 let activeCapture: Promise<string> | undefined;
 let audioRecording = false;
 let audioGeneration = 0;
@@ -41,6 +46,9 @@ let activeRequest: { id: string; controller: AbortController } | undefined;
 let history: ChatMessage[] = [];
 let lastIntent = '';
 let loadingLibrary = false;
+let changingModel = false;
+let activeHotkeys = { ask: '', toggle: '', followUp: '' };
+const shortcutWarnings: string[] = [];
 const warnings: string[] = [];
 const library = new KnowledgeLibrary();
 const transcripts = new TranscriptBuffer();
@@ -56,7 +64,11 @@ function message(error: unknown): string {
 }
 function restoreVisibility(): void {
   if (win.isDestroyed()) return;
-  if (desiredVisible && !capturing) win.showInactive(); else win.hide();
+  if (desiredVisible && !hidingForCapture) win.showInactive(); else win.hide();
+}
+function triggerAction(name: ShortcutName): void {
+  if (name === 'toggle') { desiredVisible = !desiredVisible; restoreVisibility(); }
+  else { desiredVisible = true; restoreVisibility(); send({ type: 'trigger', followUp: name === 'followUp' }); }
 }
 function stopAudio(): void {
   audioRecording = false;
@@ -143,8 +155,10 @@ function handle<T>(channel: string, fn: (arg: T) => unknown): void {
 function validateAsk(value: unknown): AskRequest {
   if (!value || typeof value !== 'object') throw new Error('Invalid question.');
   const r = value as AskRequest;
+  if (typeof r.requestId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(r.requestId)) throw new Error('Invalid request ID.');
   if (typeof r.intent !== 'string' || r.intent.length > 4000 || typeof r.followUp !== 'boolean') throw new Error('Question must be text, up to 4,000 characters.');
   if (r.language !== undefined && r.language !== 'zh' && r.language !== 'en') throw new Error('Invalid answer language.');
+  if (r.deadlineAt !== undefined && (!Number.isFinite(r.deadlineAt) || r.deadlineAt > Date.now() + FAST_LIMITS.turnMs + 1000)) throw new Error('Invalid interaction deadline.');
   if (r.focusDocumentId !== undefined && (typeof r.focusDocumentId !== 'string' || !library.resolveDocument(r.focusDocumentId))) throw new Error('Choose an article from the current library.');
   if (r.section !== undefined && (typeof r.section !== 'string' || !library.status().sections.includes(r.section))) throw new Error('Choose a valid library section.');
   return r;
@@ -159,11 +173,13 @@ function validateAudio(value: unknown): AudioChunk {
 }
 
 async function captureDisplay(): Promise<string> {
+  if (screenRecordingDenied()) throw new Error('Screen Recording permission denied.');
   // "Active display" is explicitly the display containing the pointer at ask time.
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const width = Math.min(1600, Math.round(display.size.width * display.scaleFactor));
   const height = Math.round(width * display.size.height / display.size.width);
   capturing = true;
+  hidingForCapture = true;
   win.hide();
   try {
     // Let the compositor remove Peek so it cannot read its own answer.
@@ -173,42 +189,73 @@ async function captureDisplay(): Promise<string> {
     if (!source || source.thumbnail.isEmpty()) throw new Error('Screen capture unavailable. Allow Screen Recording for Peek/Electron in System Settings, then restart.');
     const image = source.thumbnail.getSize().width > 1600 ? source.thumbnail.resize({ width: 1600 }) : source.thumbnail;
     return `data:image/png;base64,${image.toPNG().toString('base64')}`;
-  } finally { capturing = false; restoreVisibility(); }
+  } finally { capturing = false; hidingForCapture = false; restoreVisibility(); }
 }
 
 async function ask(request: AskRequest): Promise<void> {
   if (setupWindow || openingSetup) throw new Error('Finish API key settings before asking a question.');
   if (!configValid) throw new Error('Fix config.json from the tray menu and restart Peek before asking.');
   if (loadingLibrary) throw new Error('Wait for the library to finish loading.');
-  if (capturing) throw new Error('The previous screen capture is still finishing. Try again in a moment.');
+  if (changingModel) throw new Error('Wait for the model change to finish.');
   if (activeRequest) throw new Error('Stop the current answer before asking again.');
   if (!hasKey(config.chat)) throw new Error('Open API Key settings in Peek to connect your provider.');
   if (request.followUp && !history.length) throw new Error('Ask a first question before following up.');
   const transcript = transcripts.recent(config.transcriptWindowSeconds);
   if (!request.intent.trim() && !transcript.trim()) throw new Error(config.language === 'zh' ? '还没有识别到语音，请确认收音后再试。' : 'No speech has been recognized yet. Check the audio input and try again.');
+  const remainingMs = Math.min(FAST_LIMITS.turnMs, (request.deadlineAt ?? Date.now() + FAST_LIMITS.turnMs) - Date.now());
+  if (remainingMs <= 0) throw new Error(config.language === 'zh' ? '本次已达到 10 秒时限，请重试。' : 'The 10-second limit was reached. Please retry.');
   if (!request.followUp) { history = []; lastIntent = ''; }
-  const id = randomUUID();
+  const id = request.requestId;
   const controller = new AbortController();
-  activeRequest = { id, controller };
-  const focus = library.status().documents.find(doc => doc.id === request.focusDocumentId);
-  const query = [request.intent, request.followUp ? lastIntent : '', transcript, focus?.title].filter(Boolean).join('\n');
-  const sources = library.search(query, { focusDocumentId: request.focusDocumentId, section: request.section, limit: 6, maxChars: 12000 })
-    .map((source, index) => ({ ...source, id: String(index + 1) }));
-  // Raw transcript stays in main; do not leave a stale copy in renderer history.
-  send({ type: 'answer-start', requestId: id, sources, transcript: '' });
-  try {
-    const capture = captureDisplay();
-    activeCapture = capture;
-    const screenshot = await capture.finally(() => { if (activeCapture === capture) activeCapture = undefined; });
+  const deadlineAt = Date.now() + remainingMs;
+  const checkDeadline = (): void => {
+    if (Date.now() >= deadlineAt) controller.abort(new DOMException('Interaction deadline reached', 'TimeoutError'));
     controller.signal.throwIfAborted();
-    const context = contextText(request.intent, transcript, sources, focus?.title);
-    const answer = await streamAnswer(config, [
+  };
+  const deadlineTimer = setTimeout(() => controller.abort(new DOMException('Interaction deadline reached', 'TimeoutError')), remainingMs);
+  activeRequest = { id, controller };
+  try {
+    const focus = library.status().documents.find(doc => doc.id === request.focusDocumentId);
+    const query = [request.intent, request.followUp ? lastIntent : '', transcript, focus?.title].filter(Boolean).join('\n');
+    const sources = library.search(query, { focusDocumentId: request.focusDocumentId, section: request.section, limit: 6, maxChars: 12000 })
+      .map((source, index) => ({ ...source, id: String(index + 1) }));
+    checkDeadline();
+    // Raw transcript stays in main; do not leave a stale copy in renderer history.
+    send({ type: 'answer-start', requestId: id, sources, transcript: '' });
+    let screenshot: string | undefined;
+    try {
+      if (capturing) throw new Error('The previous native capture is still finishing.');
+      const capture = captureDisplay();
+      activeCapture = capture;
+      const settledCapture = capture.finally(() => { if (activeCapture === capture) activeCapture = undefined; });
+      screenshot = await abortable(settledCapture, AbortSignal.any([controller.signal, AbortSignal.timeout(FAST_LIMITS.captureMs)]));
+    } catch (error) {
+      // Electron 30 can reject getSources with a string, not an Error. A
+      // missing image must not discard a successfully transcribed question.
+      checkDeadline();
+      if (activeRequest?.id !== id) return;
+      hidingForCapture = false;
+      restoreVisibility();
+      const language = request.language ?? config.language;
+      const detail = operationError(error, 'capture', language);
+      send({ type: 'answer-warning', requestId: id, message: `${language === 'zh' ? '本次仅使用语音和文章。' : 'Using speech and articles only. '}${detail}` });
+    }
+    checkDeadline();
+    const context = contextText(request.intent, transcript, sources, focus?.title)
+      + (screenshot ? '' : '\nSCREENSHOT: unavailable. No image was provided. Do not claim to see the screen.');
+    const content: Exclude<ChatMessage['content'], string> = [{ type: 'text', text: context }];
+    if (screenshot) content.push({ type: 'image_url', image_url: { url: screenshot } });
+    const answer = await abortable(streamAnswer(config, [
       { role: 'system', content: systemPrompt(request.language ?? config.language) },
       ...history,
-      { role: 'user', content: [{ type: 'text', text: context }, { type: 'image_url', image_url: { url: screenshot } }] },
+      { role: 'user', content },
     ], controller.signal, delta => {
+      checkDeadline();
       if (activeRequest?.id === id) send({ type: 'answer-delta', requestId: id, delta });
-    });
+    }, undefined, metadata => {
+      if (activeRequest?.id === id && metadata.serviceTier) send({ type: 'answer-metadata', requestId: id, serviceTier: metadata.serviceTier });
+    }), controller.signal);
+    checkDeadline();
     if (activeRequest?.id !== id) return;
     // Keep intent + answers only: old raw audio, screenshots and retrieved chunks
     // are not accumulated in the follow-up thread.
@@ -222,8 +269,14 @@ async function ask(request: AskRequest): Promise<void> {
     lastIntent = intent;
     send({ type: 'answer-done', requestId: id });
   } catch (error) {
-    if (activeRequest?.id === id) send({ type: 'answer-error', requestId: id, message: message(error) });
-  } finally { if (activeRequest?.id === id) activeRequest = undefined; }
+    if (activeRequest?.id === id) send({ type: 'answer-error', requestId: id, message: controller.signal.reason?.name === 'TimeoutError'
+      ? ((request.language ?? config.language) === 'zh' ? '已到 10 秒时限。本次未完成，请重试。' : '10-second limit reached. This answer is incomplete; please retry.')
+      : operationError(error, 'answer', request.language ?? config.language) });
+  } finally {
+    clearTimeout(deadlineTimer);
+    if (activeRequest?.id === id) activeRequest = undefined;
+    hidingForCapture = false; restoreVisibility();
+  }
 }
 
 async function reloadLibrary(path = config.libraryPath): Promise<ReturnType<KnowledgeLibrary['status']>> {
@@ -239,8 +292,20 @@ async function reloadLibrary(path = config.libraryPath): Promise<ReturnType<Know
 }
 
 function registerIpc(): void {
-  handle('peek:bootstrap', () => ({ config: publicConfig(config), library: library.status(), ...credentialReadiness(), warnings }));
+  handle('peek:bootstrap', () => ({ config: { ...publicConfig(config), hotkeys: activeHotkeys }, library: library.status(), ...credentialReadiness(), warnings, shortcutWarnings, modelSelectionAvailable: configValid && isOfficialOpenAIEndpoint(config.chat.baseUrl) }));
   handle('peek:open-credentials', () => openCredentials());
+  handle('peek:set-model', async (model: unknown) => {
+    if (!configValid || activeRequest || loadingLibrary || changingModel || setupWindow || openingSetup) throw new Error(config.language === 'zh' ? '请先完成当前操作，再切换模型。' : 'Finish the current operation before changing models.');
+    if (typeof model !== 'string' || !isOpenAILiveModel(model)) throw new Error('Unsupported model choice.');
+    if (!isOfficialOpenAIEndpoint(config.chat.baseUrl)) throw new Error(config.language === 'zh' ? '请先在配置中使用 OpenAI API 地址。' : 'Select the OpenAI API address in Config first.');
+    changingModel = true;
+    try {
+      const next = { ...config, model };
+      await saveConfig(configPath, next);
+      config = next; history = []; lastIntent = '';
+      return config.model;
+    } finally { changingModel = false; }
+  });
   setupHandle('peek:credentials-bootstrap', () => credentialState());
   setupHandle('peek:credentials-save', value => credentialService.save(value));
   setupHandle('peek:credentials-remove', id => credentialService.remove(id));
@@ -273,7 +338,8 @@ function registerIpc(): void {
       if (generation !== audioGeneration || !audioRecording) return { text: '' };
       transcripts.add({ startedAt: chunk.startedAt, endedAt: chunk.endedAt, text });
       return { text }; // renderer does not store this text
-    } finally { if (audioController === controller) audioController = undefined; }
+    } catch (error) { throw new Error(operationError(error, 'transcription', config.language)); }
+    finally { if (audioController === controller) audioController = undefined; }
   });
   handle('peek:choose-library', async () => {
     if (!configValid) throw new Error('Fix config.json and restart before choosing a vault.');
@@ -356,18 +422,19 @@ async function start(): Promise<void> {
   tray.setToolTip('Peek');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Peek', enabled: false },
+    { label: 'Answer / 回答', click: () => triggerAction('ask') },
+    { label: 'Show or hide / 显示或隐藏', click: () => triggerAction('toggle') },
     { label: 'API Key / 密钥…', click: () => { void openCredentials().catch(() => warn('API key settings could not open. Restart Peek and try again.')); } },
     { label: 'Config / 配置…', click: () => { void shell.openPath(configPath).then(error => { if (error) warn(error); }); } },
     { type: 'separator' },
     { label: 'Quit / 退出', click: () => app.quit() },
   ]));
-  for (const [name, accelerator] of Object.entries(config.hotkeys)) {
-    try {
-      if (!globalShortcut.register(accelerator, () => {
-        if (name === 'toggle') { desiredVisible = !desiredVisible; restoreVisibility(); }
-        else { desiredVisible = true; restoreVisibility(); send({ type: 'trigger', followUp: name === 'followUp' }); }
-      })) warnings.push(`Hotkey unavailable: ${accelerator}. Change it in config.json and restart.`);
-    } catch { warnings.push(`Invalid hotkey: ${accelerator}. Change it in config.json and restart.`); }
+  const shortcuts = registerShortcuts(config.hotkeys, (accelerator, callback) => globalShortcut.register(accelerator, callback), triggerAction);
+  activeHotkeys = shortcuts.activeHotkeys;
+  for (const failure of shortcuts.failures) {
+    shortcutWarnings.push(config.language === 'zh'
+      ? `快捷键 ${failure.accelerator} 未启用（${failure.reason === 'invalid' ? '格式无效' : '被占用或系统拒绝'}）。可用菜单栏 Peek 的「回答／显示或隐藏」；在「配置」修改后重启。`
+      : `Shortcut ${failure.accelerator} is unavailable (${failure.reason === 'invalid' ? 'invalid format' : 'in use or rejected by the system'}). Use Answer / Show or hide in the Peek menu; edit Config and restart to change it.`);
   }
   transcriptTimer = setInterval(() => transcripts.prune(), 1000);
   transcriptTimer.unref();

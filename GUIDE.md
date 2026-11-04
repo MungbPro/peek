@@ -18,7 +18,7 @@
 
 Peek 使用你自己的 OpenAI API key 和 API 组织额度。ChatGPT 订阅本身不会配置 Peek；符合条件的 Pro/Business 用户可按官方说明领取并关联 [API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)。密钥可从 [OpenAI API Platform](https://platform.openai.com/api-keys) 创建。
 
-首次使用时允许麦克风和屏幕录制。密钥管理会暂停正在进行的回答和音频。保存后先开启收音，听完问题再按一次 `Option + Space` 获取回答；对话中不用输入文字。未配置 key 时仍可查看本地资料库。
+首次使用时允许麦克风和屏幕录制。密钥管理会暂停正在进行的回答和音频。保存后先开启收音，听完问题再按一次 `Control + Enter` 获取回答；对话中不用输入文字。未配置 key 时仍可查看本地资料库。
 
 开发者从源码启动需要 Node.js 22.12+ 和 npm，同样可以在窗口中输入 key：
 
@@ -31,22 +31,40 @@ npm run dev
 
 ## 对话时怎么用
 
-开始前，在“准备”中选择文库和主讲文章，并确认正在收音。对方说完问题后，按 **`Option + Space`**，或按住 `Option` 点击大的回答按钮。Peek 会结合最近语音、截图和相关资料作答。
+开始前，在“准备”中选择文库、主讲文章和模型，并确认正在收音。对方说完问题后，按 **`Control + Enter`**，或按住 `Shift` 点击大的回答按钮。Peek 会结合最近语音、截图和相关资料作答。
 
 接着交流，再按同一个快捷键即可追问，不用区分“提问”和“追问”。换一个话题时点击“新话题”，清除此前的问答线程。对话界面没有问题输入框。
 
 | 操作 | macOS 默认按键 |
 | --- | --- |
-| 根据当前对话回答；再次按下继续追问 | `Option + Space` |
-| 隐藏 / 显示 | `Option + H` |
-| 临时允许鼠标点击 | 按住 `Option` |
+| 根据当前对话回答；再次按下继续追问 | `Control + Enter` |
+| 隐藏 / 显示 | `Control + Backspace` |
+| 临时允许鼠标点击 | 按住 `Shift` |
 | 清除之前的问答 | 点击“新话题” |
 
-收音不会随启动自动开始；如果尚未收音，第一次按主按钮只开启收音；说完问题后再按一次，才会请求回答。Peek 不会仅因为检测到语音就自动生成回答。按下回答会提交尚未结束的音频片段，最多等 7 秒取得转写；未完成时会提示稍后再按，本次不会请求模型回答。
+收音不会随启动自动开始；如果尚未收音，第一次按主按钮只开启收音；说完问题后再按一次，才会请求回答。Peek 不会仅因为检测到语音就自动生成回答。按下回答会提交尚未结束的音频片段，最多等 3 秒取得转写；未完成时会提示稍后再按，本次不会请求模型回答。
 
-窗口为 420 × 520，默认在主屏右上角置顶并鼠标穿透。松开 `Option` 后恢复穿透。隐藏窗口不会暂停音频。托盘可管理密钥、打开配置或退出。Windows 对应使用 `Alt`；Windows 实机行为尚未完整验证。
+`Enter` 是回车键；`Backspace` 是 Mac 上标为 `delete` 或 `⌫` 的删除键。窗口为 420 × 520，默认在主屏右上角置顶并鼠标穿透。松开 `Shift` 后恢复穿透。隐藏不会暂停音频，提问会重新显示浮窗。菜单栏 Peek 图标也可回答、显示/隐藏、管理密钥、打开配置或退出。Windows 使用相同默认按键，实机行为尚未完整验证。
 
-高级用户仍可在配置中保留单独的追问快捷键，默认 `Alt+Enter`；常用界面不需要它。升级时会迁移旧版本完全匹配的默认按键，自定义按键保持不变。
+默认不占用 Option 组合键。单独的 `followUp` 快捷键默认为空，使用同一个提问快捷键即可继续追问。升级会自动迁移 v0.1.0、v0.1.1 完全匹配的旧默认按键，自定义按键保持不变。
+
+快捷键注册失败时，浮窗持续显示提示，也不会把失败按键显示为可用；请先用菜单栏的「回答」或「显示/隐藏」。任何默认按键仍可能与其他应用冲突，可通过托盘打开配置修改后重启。
+
+### 模型与等待时间
+
+「准备」里的模型下拉框默认选 **Sol（`gpt-6.1-sol`）**，也可选 **Astra（`gpt-6-astra`）**。切换后立即保存生效，不用编辑文件或重启；不会因超时自动换成其他模型。模型下拉框只对官方 OpenAI 地址 `https://api.openai.com/v1` 启用；自定义提供方和模型仍通过配置文件设置，切换模型不会更改地址或密钥。
+
+两个 OpenAI 模型都使用 Chat Completions、`reasoning_effort: "low"` 和 `service_tier: "fast"`。Fast mode 比标准处理收费更高；服务端实际处理档位可能不同，返回时会显示实际档位。参见 [OpenAI 模型说明](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.1-sol) 和 [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode)。
+
+收音期间，每 2 秒提交一个可独立解码的 WebM 片段，用 `gpt-transcribe` 做文件转写。它是滚动提交短录音，未实现 Realtime WebSocket 语音识别；仍可能漏字或延迟。参见 [OpenAI 文件转写说明](https://developers.openai.com/api/docs/guides/speech-to-text)。
+
+已开启收音后，从按下提问到结束使用 **10 秒总等待预算**：最新转写最多等 3 秒，截图最多等 800 毫秒，剩余时间用于回答。超过总预算会取消请求和后续流式输出，保留已收到的文字并标为未完成，可再次提问重试。**这是应用的等待上限，不是 10 秒内必定得到完整答案的保证**；网络、权限和提供方速度仍会影响结果。
+
+### 提问报错
+
+截图失败时会明确提示本次未使用屏幕，仍可根据语音和文库回答。检查「系统设置 → 隐私与安全性 → 屏幕录制」中 Peek 的权限，授权后退出并重启。已授权仍失败时，也可能是系统捕获或显示器问题，不能仅凭报错断定原因。
+
+v0.1.1 会把 Electron 返回的部分截图错误显示成 `An unexpected error occurred.`；v0.1.2 已区分截图、转写和回答失败，显示对应操作提示。截图缺失时，回答不能可靠解释屏幕上的内容。
 
 ## Obsidian：主文章 + 相关资料
 
@@ -81,7 +99,7 @@ npm run dev
 
 ## 配置
 
-托盘菜单打开 `config.json`，编辑后重启。macOS 默认位置：
+模型可在「准备」中切换并立即保存；其他配置从托盘菜单打开 `config.json`，编辑后重启。macOS 默认位置：
 
 ```text
 ~/Library/Application Support/Peek/config.json
@@ -106,15 +124,15 @@ Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/
 ```json
 {
   "language": "zh",
-  "model": "gpt-4.1-mini",
+  "model": "gpt-6.1-sol",
   "inputDeviceId": "",
   "transcriptWindowSeconds": 30,
   "hotkeys": {
-    "ask": "Alt+Space",
-    "toggle": "Alt+H",
-    "followUp": "Alt+Enter"
+    "ask": "Control+Enter",
+    "toggle": "Control+Backspace",
+    "followUp": ""
   },
-  "interactionModifiers": ["Alt"],
+  "interactionModifiers": ["Shift"],
   "chat": {
     "baseUrl": "https://api.openai.com/v1",
     "apiKeyEnv": "OPENAI_API_KEY",
@@ -123,13 +141,13 @@ Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/
   "transcription": {
     "baseUrl": "https://api.openai.com/v1",
     "apiKeyEnv": "OPENAI_API_KEY",
-    "model": "whisper-1"
+    "model": "gpt-transcribe"
   },
   "libraryPath": ""
 }
 ```
 
-顶部 `中 / EN` 可切换本次运行的界面和回答语言；`language` 设为 `zh` 或 `en` 可更改启动默认值。空的 `inputDeviceId` 使用系统默认输入。内存转写缓冲保留最近 60 秒，`transcriptWindowSeconds` 决定每次提问取其中多长时间（5–60 秒）。默认使用 `whisper-1`；OpenAI 已公布其 **2027 年 2 月 26 日停用**，届时需要更换并验证转写模型，见 [官方停用公告](https://developers.openai.com/api/docs/deprecations)。
+顶部 `中 / EN` 可切换本次运行的界面和回答语言；`language` 设为 `zh` 或 `en` 可更改启动默认值。空的 `inputDeviceId` 使用系统默认输入。内存转写缓冲保留最近 60 秒，`transcriptWindowSeconds` 决定每次提问取其中多长时间（5–60 秒）。默认转写模型为 `gpt-transcribe`。旧配置若继续指定 `whisper-1`，需留意其 **2027 年 2 月 26 日停用**，见 [官方停用公告](https://developers.openai.com/api/docs/deprecations)。
 
 ### 中国大陆可选模型
 
@@ -148,7 +166,7 @@ OpenAI 不是唯一支持图片的 API。阿里云百炼的 Qwen-VL 提供 OpenA
 
 以上是北京地域的兼容地址示例；不同地域、工作空间的 key 和地址可能不同，请以自己控制台及 [Qwen-VL 官方文档](https://www.alibabacloud.com/help/zh/model-studio/qwen-vl-compatible-with-openai) 为准。官方也推荐工作空间专用地址 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。Qwen3-VL 示例使用 `max_tokens`；OpenAI 默认使用 `max_completion_tokens`，由 `chat.tokenLimitParameter` 选择，参见[百炼参数说明](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)。
 
-这只切换问答模型，不会让 Qwen-VL 自动提供 Whisper 转写。语音转写有独立配置，需另行验证提供方的接口兼容性。尚未用中国大陆网络或真实百炼 key 做端到端验证。**API 在网络上可访问，不代表模型会搜索互联网；Peek 当前没有网页搜索功能。**
+这只切换问答模型，不会让 Qwen-VL 自动提供 OpenAI 语音转写。语音转写有独立配置，需另行验证提供方的接口兼容性。尚未用中国大陆网络或真实百炼 key 做端到端验证。**API 在网络上可访问，不代表模型会搜索互联网；Peek 当前没有网页搜索功能。**
 
 ## 开发、检查与打包
 
@@ -178,9 +196,17 @@ Saved credentials are encrypted with Electron `safeStorage` in `credentials.enc`
 
 For source development, use Node.js 22.12+, run `npm install` and `npm run dev`, then use the same key window. Existing `.env` setups remain optional; saved app credentials take precedence. Grant Microphone and Screen Recording permissions when requested. Opening key management pauses active answers and audio. Recording starts only after an explicit audio or answer action, including after a normal launch; the audio button pauses it.
 
-Before the conversation, choose a vault and article from the **Prepare** dropdowns and start listening. After a spoken question, press **Option+Space** for an answer. Press the same shortcut for subsequent follow-ups; **New topic** clears the previous Q&A thread. There is no question textbox. If audio is off, the first press starts listening; press again after the question to request an answer. Speech alone never triggers an answer. Pressing Answer flushes the current clip and waits up to seven seconds for transcription. If it is not ready, Peek asks you to press again later and does not call the model for that press.
+Before the conversation, choose a vault, article, and model from the **Prepare** dropdowns and start listening. After a spoken question, press **Control+Enter** for an answer. Press the same shortcut for subsequent follow-ups; **New topic** clears the previous Q&A thread. There is no question textbox. If audio is off, the first press starts listening; press again after the question to request an answer. Speech alone never triggers an answer. Pressing Answer flushes the current clip and waits up to three seconds for transcription. If it is not ready, Peek asks you to press again later and does not call the model for that press.
 
-Hold **Option** to click the overlay, including its large answer button. **Option+H** toggles visibility; hiding does not pause audio. Windows uses **Alt**, with hardware behavior still unverified. The optional explicit follow-up shortcut remains **Alt+Enter** in config. Upgrades migrate the old exact defaults while preserving customized shortcuts.
+Hold **Shift** to click the overlay. **Control+Backspace** toggles visibility (`Backspace` is the Mac key labelled `delete` or `⌫`); hiding does not pause audio, and asking shows the overlay again. The tray also provides **Answer**, **Show/Hide**, and **Quit**. Windows uses the same default keys, with hardware behavior still unverified. The separate `followUp` shortcut defaults to an empty string because the main shortcut already continues the thread. Upgrades migrate exact v0.1.0/v0.1.1 defaults while preserving customized shortcuts.
+
+No Option combination is registered by default. Failed shortcut registrations remain visible as warnings and are not advertised as active; use the tray actions until you change the conflicting binding in config and restart. Other applications may still reserve the new defaults.
+
+If screen capture fails, Peek explicitly says no screenshot was used and continues with speech and library context. Check Screen Recording permission for Peek in System Settings, then quit and restart after granting it. Capture can also fail for other OS/display reasons. Version 0.1.1 masked some native capture errors as `An unexpected error occurred.`; v0.1.2 identifies the failing stage and gives a relevant action. An answer without a screenshot cannot reliably interpret screen-only content.
+
+The model picker defaults to **Sol (`gpt-6.1-sol`)** and also offers **Astra (`gpt-6-astra`)**. Changes save immediately without restarting. Both OpenAI profiles use Chat Completions with `reasoning_effort: "low"` and `service_tier: "fast"`. Fast mode costs more than Standard; Peek shows the actual service tier when returned. It never switches to a different model to meet the time budget. The picker is enabled only for the official OpenAI endpoint (`https://api.openai.com/v1`); custom models/providers remain available through config. Model selection does not replace endpoints or keys. See the [model guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.1-sol) and [Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
+
+Audio is sent as independent two-second WebM files to `gpt-transcribe`; this is rolling file transcription, not Realtime WebSocket speech recognition. Once listening, each Answer action has a ten-second total waiting budget, including up to three seconds for the latest transcript and 800 milliseconds for screenshot capture. At the deadline, Peek cancels the request and further streaming, keeps any received text marked incomplete, and allows a retry. This limits waiting; it does not guarantee a complete successful answer within ten seconds. See [file transcription](https://developers.openai.com/api/docs/guides/speech-to-text).
 
 Choose the article before presenting and leave the scope on the whole library to include supporting sources. A section filter narrows retrieval. Sources include paths and line numbers. Reload after editing notes. Retrieval is lexical: bilingual aliases help, but cross-language synonyms are not automatically translated.
 

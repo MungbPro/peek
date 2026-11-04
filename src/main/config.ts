@@ -9,15 +9,24 @@ export interface Config extends PublicConfig {
   libraryPath: string;
 }
 
-export function defaultConfig(interactionModifiers = ['Alt']): Config {
+export function defaultConfig(interactionModifiers = ['Shift']): Config {
   return {
-    model: 'gpt-4.1-mini', language: 'zh', inputDeviceId: '', transcriptWindowSeconds: 30,
-    hotkeys: { ask: 'Alt+Space', toggle: 'Alt+H', followUp: 'Alt+Enter' },
+    model: 'gpt-6.1-sol', language: 'zh', inputDeviceId: '', transcriptWindowSeconds: 30,
+    hotkeys: { ask: 'Control+Enter', toggle: 'Control+Backspace', followUp: '' },
     interactionModifiers,
     chat: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', tokenLimitParameter: 'max_completion_tokens' },
-    transcription: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', model: 'whisper-1' },
+    transcription: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', model: 'gpt-transcribe' },
     libraryPath: '',
   };
+}
+
+/** Apply OpenAI-specific model behavior only to the canonical API endpoint. */
+export function isOfficialOpenAIEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === 'https:' && url.hostname === 'api.openai.com' && !url.port
+      && url.pathname.replace(/\/+$/, '') === '/v1' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -28,6 +37,14 @@ function str(value: unknown, fallback: string, label: string, allowEmpty = false
   if (value === undefined) return fallback;
   if (typeof value !== 'string' || value.length > 4096 || (!allowEmpty && !value.trim())) throw new Error(`${label} must be a ${allowEmpty ? '' : 'nonempty '}string.`);
   return value.trim();
+}
+function hotkeyIdentity(value: string): string {
+  const aliases: Record<string, string> = {
+    ctrl: 'control', cmd: 'command', option: 'alt', return: 'enter',
+    commandorcontrol: process.platform === 'darwin' ? 'command' : 'control',
+    cmdorctrl: process.platform === 'darwin' ? 'command' : 'control',
+  };
+  return value.toLowerCase().split('+').map(part => aliases[part] ?? part).sort().join('+');
 }
 function endpoint(value: unknown, fallback: EndpointConfig, label: string): EndpointConfig {
   const raw = value === undefined ? {} : object(value, label);
@@ -59,20 +76,23 @@ export function parseConfig(value: unknown, defaults = defaultConfig()): Config 
     hotkeys: {
       ask: str(hotkeys.ask, defaults.hotkeys.ask, 'hotkeys.ask'),
       toggle: str(hotkeys.toggle, defaults.hotkeys.toggle, 'hotkeys.toggle'),
-      followUp: str(hotkeys.followUp, defaults.hotkeys.followUp, 'hotkeys.followUp'),
+      // Asking again already follows up in the current thread. A separate
+      // global binding is optional, so it need not occupy another app's key.
+      followUp: str(hotkeys.followUp, defaults.hotkeys.followUp, 'hotkeys.followUp', true),
     },
     interactionModifiers: modifiers,
     chat: { ...endpoint(raw.chat, defaults.chat, 'chat'), tokenLimitParameter },
     transcription: { ...endpoint(raw.transcription, defaults.transcription, 'transcription'), model: str(transcription.model, defaults.transcription.model, 'transcription.model') },
     libraryPath,
   };
-  if (new Set(Object.values(result.hotkeys).map(x => x.toLowerCase())).size !== 3) throw new Error('Each hotkey must be different.');
+  const enabledHotkeys = Object.values(result.hotkeys).filter(Boolean).map(hotkeyIdentity);
+  if (new Set(enabledHotkeys).size !== enabledHotkeys.length) throw new Error('Each hotkey must be different.');
   return result;
 }
 export async function loadConfig(path: string, defaults: Config): Promise<Config> {
   try {
     const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
-    const migrated = migrateLegacyShortcuts(raw, defaults);
+    const migrated = migrateLegacyModels(migrateLegacyShortcuts(raw, defaults), defaults);
     const config = parseConfig(migrated, defaults);
     if (JSON.stringify(migrated) !== JSON.stringify(raw)) await saveConfig(path, config);
     return config;
@@ -84,18 +104,55 @@ export async function loadConfig(path: string, defaults: Config): Promise<Config
   }
 }
 
-/** Upgrade only the exact shipped v0.1.0 bindings; keep custom choices intact. */
+/** Replace only previously shipped OpenAI model defaults; keep custom providers. */
+export function migrateLegacyModels(value: unknown, defaults = defaultConfig()): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const raw = value as Record<string, unknown>;
+  const result = { ...raw };
+  const usesOpenAI = (endpointValue: unknown, fallback: EndpointConfig): boolean => {
+    if (endpointValue === undefined) return isOfficialOpenAIEndpoint(fallback.baseUrl);
+    if (!endpointValue || typeof endpointValue !== 'object' || Array.isArray(endpointValue)) return false;
+    const baseUrl = (endpointValue as Record<string, unknown>).baseUrl ?? fallback.baseUrl;
+    return typeof baseUrl === 'string' && isOfficialOpenAIEndpoint(baseUrl);
+  };
+  if (raw.model === 'gpt-4.1-mini' && usesOpenAI(raw.chat, defaults.chat)) result.model = defaults.model;
+  if (raw.transcription && typeof raw.transcription === 'object' && !Array.isArray(raw.transcription)) {
+    const transcription = raw.transcription as Record<string, unknown>;
+    if (transcription.model === 'whisper-1' && usesOpenAI(transcription, defaults.transcription)) {
+      result.transcription = { ...transcription, model: defaults.transcription.model };
+    }
+  }
+  return result;
+}
+
+/** Upgrade exact shipped bindings from v0.1.0/v0.1.1; keep custom choices intact. */
 export function migrateLegacyShortcuts(value: unknown, defaults = defaultConfig()): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const raw = value as Record<string, unknown>;
   const result = { ...raw };
   if (raw.hotkeys && typeof raw.hotkeys === 'object' && !Array.isArray(raw.hotkeys)) {
-    const hotkeys = { ...raw.hotkeys as Record<string, unknown> };
-    const old = { ask: 'CommandOrControl+Shift+Space', toggle: 'CommandOrControl+Shift+H', followUp: 'CommandOrControl+Shift+Enter' };
-    for (const key of ['ask', 'toggle', 'followUp'] as const) if (hotkeys[key] === old[key]) hotkeys[key] = defaults.hotkeys[key];
+    const original = raw.hotkeys as Record<string, unknown>;
+    const hotkeys = { ...original };
+    const old = {
+      ask: ['CommandOrControl+Shift+Space', 'Alt+Space'],
+      toggle: ['CommandOrControl+Shift+H', 'Alt+H'],
+      followUp: ['CommandOrControl+Shift+Enter', 'Alt+Enter'],
+    };
+    for (const key of ['ask', 'toggle', 'followUp'] as const) {
+      if (old[key].includes(hotkeys[key] as string)) hotkeys[key] = defaults.hotkeys[key];
+    }
+    // A retained custom binding owns its key. Do not invalidate the whole
+    // configuration by moving a historical default onto that key during upgrade.
+    for (const key of ['ask', 'toggle', 'followUp'] as const) {
+      const target = hotkeys[key];
+      if (target === original[key] || typeof target !== 'string' || !target) continue;
+      if (Object.entries(hotkeys).some(([other, value]) => other !== key && typeof value === 'string' && value && hotkeyIdentity(value) === hotkeyIdentity(target))) {
+        hotkeys[key] = original[key];
+      }
+    }
     result.hotkeys = hotkeys;
   }
-  if (JSON.stringify(raw.interactionModifiers) === '["Command","Alt"]' || JSON.stringify(raw.interactionModifiers) === '["Control","Alt"]') {
+  if (['["Command","Alt"]', '["Control","Alt"]', '["Alt"]'].includes(JSON.stringify(raw.interactionModifiers))) {
     result.interactionModifiers = defaults.interactionModifiers;
   }
   return result;

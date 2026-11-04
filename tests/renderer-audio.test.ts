@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RollingAudio } from '../src/renderer/audio';
+import { RollingAudio, type AudioOptions } from '../src/renderer/audio';
 
 test('audio uses complete recordings, bounds its queue, and drops in-flight results after pause', async () => {
   const descriptors = ['navigator', 'MediaRecorder', 'setTimeout', 'clearTimeout'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
@@ -130,11 +130,11 @@ interface FlushHarness {
   audio: RollingAudio;
   calls: Array<{ duration: number; header: string }>;
   advance(milliseconds: number): Promise<void>;
-  settleRequest(success?: boolean): Promise<void>;
+  settleRequest(success?: boolean, message?: string): Promise<void>;
   recorderCount(): number;
 }
 
-async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>): Promise<void> {
+async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>, options: AudioOptions = {}): Promise<void> {
   const names = ['navigator', 'MediaRecorder', 'setTimeout', 'clearTimeout'];
   const descriptors = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   const originalNow = Date.now;
@@ -143,7 +143,7 @@ async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>): 
   let nextTimer = 0;
   const timers = new Map<number, { at: number; callback: () => void }>();
   const calls: FlushHarness['calls'] = [];
-  const pending: Array<{ resolve: () => void; reject: () => void }> = [];
+  const pending: Array<{ resolve: () => void; reject: (message?: string) => void }> = [];
   let recorderCount = 0;
   const track = new EventTarget() as EventTarget & { label: string; stop(): void };
   track.label = 'Synthetic microphone'; track.stop = () => {};
@@ -172,10 +172,10 @@ async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>): 
   const audio = new RollingAudio({
     transcribe: async chunk => {
       calls.push({ duration: chunk.endedAt - chunk.startedAt, header: new TextDecoder().decode(chunk.data) });
-      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject: () => reject(new Error('Synthetic network failure')) }));
+      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject: message => reject(new Error(message ?? 'Synthetic network failure')) }));
       return { text: 'spoken question' };
     }, status: () => {}, devices: () => {},
-  });
+  }, options);
   try {
     await run({
       audio, calls, recorderCount: () => recorderCount,
@@ -188,9 +188,9 @@ async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>): 
         }
         now = target; await microtasks();
       },
-      settleRequest: async (success = true) => {
+      settleRequest: async (success = true, message?: string) => {
         const request = pending.shift(); assert.ok(request, 'a transcription request must be in flight');
-        if (success) request.resolve(); else request.reject();
+        if (success) request.resolve(); else request.reject(message);
         await microtasks();
       },
     });
@@ -250,4 +250,65 @@ test('stop and failed transcription resolve flush as false without waiting for i
     await settleRequest();
     assert.equal(audio.active, false);
   });
+});
+
+test('latest transcription failure stays actionable until success, pause, or restart', async () => {
+  await withFlushHarness(async ({ audio, advance, settleRequest }) => {
+    await audio.start('');
+    assert.equal(audio.lastError, null);
+    await advance(400);
+    const failed = audio.flush(); await advance(0);
+    await settleRequest(false, "Error invoking remote method 'peek:transcribe': Error: 语音转写失败（API 401）。请检查密钥。");
+    assert.equal(await failed, false);
+    assert.equal(audio.lastError, '语音转写失败（API 401）。请检查密钥。');
+    assert.equal(audio.active, true);
+
+    await advance(400);
+    const recovered = audio.flush(); await advance(0);
+    await settleRequest();
+    assert.equal(await recovered, true);
+    assert.equal(audio.lastError, null);
+
+    for (let i = 0; i < 3; i++) {
+      await advance(400);
+      const failing = audio.flush(); await advance(0);
+      await settleRequest(false);
+      assert.equal(await failing, false);
+      assert.match(audio.lastError!, /Synthetic network failure/);
+    }
+    assert.equal(audio.active, false, 'three consecutive errors pause recording');
+    await audio.start('');
+    assert.equal(audio.lastError, null, 'a fresh start clears the prior failure');
+    await advance(400);
+    const failedAgain = audio.flush(); await advance(0);
+    await settleRequest(false);
+    assert.equal(await failedAgain, false);
+    audio.stop();
+    assert.equal(audio.lastError, null, 'explicit pause clears the prior failure');
+  });
+});
+
+test('fast audio uses complete two-second chunks and bounds a fresh flush to three seconds', async () => {
+  await withFlushHarness(async ({ audio, advance, calls, settleRequest, recorderCount }) => {
+    await audio.start('');
+    await advance(1999);
+    assert.equal(calls.length, 0);
+    await advance(1);
+    assert.equal(calls[0]?.duration, 2000);
+    assert.equal(recorderCount(), 2);
+    await settleRequest();
+
+    await advance(500);
+    let settled: boolean | undefined;
+    const pending = audio.flush().then(value => { settled = value; return value; });
+    await advance(0);
+    assert.equal(calls[1]?.duration, 500);
+    await advance(2999);
+    assert.equal(settled, undefined, 'a previous completed transcript must not satisfy this flush');
+    await advance(1);
+    assert.equal(await pending, false);
+    assert.equal(audio.active, true);
+    await settleRequest();
+    assert.equal(settled, false, 'a late transcription cannot change the already timed-out result');
+  }, { chunkMilliseconds: 2000, flushTimeoutMilliseconds: 3000 });
 });

@@ -12,6 +12,7 @@ const api: PeekApi = {
   openSource: (id) => ipcRenderer.invoke('peek:open-source', id),
   audioStatus: (status) => ipcRenderer.invoke('peek:audio-status', status),
   openCredentials: () => ipcRenderer.invoke('peek:open-credentials'),
+  setModel: (model) => ipcRenderer.invoke('peek:set-model', model),
   onEvent: (listener) => {
     const receive = (_event: Electron.IpcRendererEvent, message: PeekEvent): void => listener(message);
     ipcRenderer.on('peek:event', receive);

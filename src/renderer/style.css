@@ -21,6 +21,7 @@ h1 { margin: 0; font-size: 17px; letter-spacing: -.6px; font-weight: 650; }
 .status-dot { width: 5px; height: 5px; background: #7d8d82; border-radius: 50%; }
 .audio-toggle[aria-pressed='true'] .status-dot { background: #c5e9a4; box-shadow: 0 0 6px #c5e9a444; }
 .notice { flex: 0 0 auto; margin: 0 14px 8px; padding: 8px 10px; max-height: 72px; overflow: auto; color: #e3cba1; background: #a17a1f15; border: 1px solid #b39a6a24; border-radius: 7px; font-size: 11px; line-height: 1.4; }
+#capture-warning { margin: 0 0 12px; }
 .library-panel { margin: 0 14px; border: 1px solid #ffffff12; border-radius: 9px; background: #ffffff03; flex: 0 0 auto; }
 summary { list-style: none; }
 summary::-webkit-details-marker { display: none; }

@@ -74,6 +74,14 @@ jobs:
             assert.equal(typeof Number(flags(0)), "number");
             console.log("Packaged native module loaded on " + process.arch);
           '
+      - name: Exercise packaged app and failure recovery on native hardware
+        env:
+          PEEK_SMOKE_EXECUTABLE: ${{ matrix.appDirectory }}/Contents/MacOS/Peek
+        run: npm run test:smoke
+      - name: Check shortcut migration and rejection feedback
+        env:
+          PEEK_SMOKE_EXECUTABLE: ${{ matrix.appDirectory }}/Contents/MacOS/Peek
+        run: node scripts/shortcut-smoke.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: Peek-macOS-${{ matrix.arch }}-unsigned

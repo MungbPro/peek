@@ -1,5 +1,6 @@
 import { RollingAudio } from './audio';
 import type { Bootstrap, LibraryStatus, PeekEvent, SourcePassage } from '../shared/types';
+import { FAST_LIMITS } from '../shared/timing';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -8,11 +9,12 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const elements = {
-  interaction: $('interaction'), notice: $('notice'), languageToggle: $<HTMLButtonElement>('language-toggle'),
+  interaction: $('interaction'), notice: $('notice'), shortcutWarning: $('shortcut-warning'), captureWarning: $('capture-warning'), languageToggle: $<HTMLButtonElement>('language-toggle'),
   audioToggle: $<HTMLButtonElement>('audio-toggle'), audioLabel: $('audio-label'), audioState: $('audio-state'), audioMessage: $('audio-message'), devices: $('devices'),
   preparePanel: $('prepare-panel'), prepareToggle: $<HTMLButtonElement>('prepare-toggle'), prepareDone: $<HTMLButtonElement>('prepare-done'), focusedTitle: $('focused-title'), libraryCount: $('library-count'),
   chooseLibrary: $<HTMLButtonElement>('choose-library'), reloadLibrary: $<HTMLButtonElement>('reload-library'),
   section: $<HTMLSelectElement>('section'), focusArticle: $<HTMLSelectElement>('focus-article'),
+  model: $<HTMLSelectElement>('model'),
   emptyState: $('empty-state'), emptyTitle: $('empty-title'), responseArea: $('response-area'), answer: $('answer'),
   sourcesPanel: $<HTMLDetailsElement>('sources-panel'), sources: $('sources'), sourcesLabel: $('sources-label'),
   audioInputLabel: $('audio-input-label'),
@@ -33,14 +35,37 @@ let interactive = false;
 let audioState: 'idle' | 'recording' | 'error' = 'idle';
 let latestSources: SourcePassage[] = [];
 let openingCredentials = false;
+let changingModel = false;
 let askEpoch = 0;
 let pendingPhase: 'speech' | 'answer' | null = null;
+let turnStartedAt = 0;
+let turnEndedAt = 0;
+let firstTokenAt = 0;
+let serviceTier = '';
+let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+let timingTimer: ReturnType<typeof setInterval> | undefined;
+
+function renderTiming(): void {
+  const totalMs = turnStartedAt ? Math.max(0, (turnEndedAt || Date.now()) - turnStartedAt) : 0;
+  const elapsed = turnStartedAt ? `${(totalMs / 1000).toFixed(1)}s` : '';
+  elements.requestState.textContent = [pendingPhase === 'speech' && busy ? t('waitingAudio') : '', elapsed, serviceTier].filter(Boolean).join(' · ');
+  elements.requestState.dataset.totalMs = turnStartedAt ? String(totalMs) : '';
+  elements.requestState.dataset.firstTokenMs = firstTokenAt ? String(firstTokenAt - turnStartedAt) : '';
+  elements.requestState.dataset.serviceTier = serviceTier;
+  elements.requestState.title = firstTokenAt ? `${language === 'zh' ? '首字' : 'First token'}: ${((firstTokenAt - turnStartedAt) / 1000).toFixed(1)}s` : '';
+}
+
+function finishTiming(): void {
+  clearTimeout(deadlineTimer); clearInterval(timingTimer);
+  if (turnStartedAt && !turnEndedAt) turnEndedAt = Date.now();
+  renderTiming();
+}
 
 const labels = {
   zh: {
-    pass: '穿透', interactive: '操作中', startAudio: '开启音频', pauseAudio: '暂停音频', audioOff: '音频关闭', audioError: '音频异常', listening: '收音中 · 5秒',
+    pass: '穿透', interactive: '操作中', startAudio: '开启音频', pauseAudio: '暂停音频', audioOff: '音频关闭', audioError: '音频异常', listening: '收音中 · 2秒',
     library: '文库', disconnected: '未连接', entireLibrary: '全部文库', focus: '选择当前文章', searchArticle: '查找文章…', openVault: '打开文库', reload: '刷新',
-    prepare: '准备', prepareDone: '开始', noArticle: '未选文章', newTopic: '新话题', listenFirst: '听完问题后，按 Option + Space。', waitingAudio: '正在听取最后一句…', audioPending: '最后一句还没转写完成，请稍后再按一次。', startListening: '开始收音',
+    prepare: '准备', prepareDone: '开始', noArticle: '未选文章', newTopic: '新话题', listenFirst: '听完问题后，点击「回答」。', waitingAudio: '正在听取最后一句…', audioPending: '最后一句还没转写完成，请稍后再按一次。', startListening: '开始收音',
     ready: '听完问题，按一下。', answer: '回答', incomplete: '未完成', stopped: '已停止', connections: '关联', audioContext: '音频上下文', audioInput: '音频输入',
     placeholder: '', ask: '回答', asking: '思考中…', followUp: '追问', stop: '停止', reading: '读取中…',
     noKey: '点击「连接 OpenAI」设置密钥。', noAudioKey: '请在密钥窗口连接语音转写服务。',
@@ -48,9 +73,9 @@ const labels = {
     openSource: '打开原文', setupError: '启动失败：', audioFailed: '音频异常。', noDevices: '开启音频后显示设备。', unnamed: '未命名输入',
   },
   en: {
-    pass: 'Click-through', interactive: 'Interactive', startAudio: 'Start audio', pauseAudio: 'Pause audio', audioOff: 'Audio off', audioError: 'Audio error', listening: 'Listening · 5s',
+    pass: 'Click-through', interactive: 'Interactive', startAudio: 'Start audio', pauseAudio: 'Pause audio', audioOff: 'Audio off', audioError: 'Audio error', listening: 'Listening · 2s',
     library: 'Library', disconnected: 'Not connected', entireLibrary: 'Entire library', focus: 'Choose an article', searchArticle: 'Find article…', openVault: 'Open vault', reload: 'Reload',
-    prepare: 'Prepare', prepareDone: 'Ready', noArticle: 'No article selected', newTopic: 'New topic', listenFirst: 'After the question, press Option + Space.', waitingAudio: 'Finishing the last sentence…', audioPending: 'The last sentence is still transcribing. Press again shortly.', startListening: 'Start listening',
+    prepare: 'Prepare', prepareDone: 'Ready', noArticle: 'No article selected', newTopic: 'New topic', listenFirst: 'After the question, click Answer.', waitingAudio: 'Finishing the last sentence…', audioPending: 'The last sentence is still transcribing. Press again shortly.', startListening: 'Start listening',
     ready: 'Hear the question. Press once.', answer: 'Answer', incomplete: 'Incomplete', stopped: 'Stopped', connections: 'Connections', audioContext: 'Audio context', audioInput: 'Audio input',
     placeholder: '', ask: 'Answer', asking: 'Thinking…', followUp: 'Follow up', stop: 'Stop', reading: 'Reading…',
     noKey: 'Click Connect OpenAI to set up your key.', noAudioKey: 'Connect transcription in the API key window.',
@@ -86,7 +111,7 @@ function updateLanguage(): void {
     const modifiers = bootstrap.config.interactionModifiers.map(displayShortcut).join(' + ');
     elements.holdHint.textContent = language === 'zh' ? `按住 ${modifiers} 操作` : `Hold ${modifiers} to interact`;
     elements.ask.title = displayShortcut(bootstrap.config.hotkeys.ask);
-
+    elements.askKey.textContent = displayShortcut(bootstrap.config.hotkeys.ask);
   }
   updateAudioLabels();
   updateLibrary(library);
@@ -105,23 +130,24 @@ function errorText(error: unknown): string {
 }
 
 function displayShortcut(shortcut: string): string {
-  return shortcut.replace(/CommandOrControl|Command|Cmd/g, navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replace(/Shift/g, '⇧').replace(/Alt|Option/g, navigator.platform.includes('Mac') ? 'Option' : 'Alt').replace(/Control/g, 'Ctrl').replace(/\+/g, ' ');
+  return shortcut.replace(/CommandOrControl|Command|Cmd/g, navigator.platform.includes('Mac') ? 'Command' : 'Control').replace(/Alt|Option/g, navigator.platform.includes('Mac') ? 'Option' : 'Alt').replace(/Enter/g, language === 'zh' ? '回车' : 'Enter').replace(/\+/g, ' + ');
 }
 
 function updateActions(): void {
-  elements.ask.disabled = !bootstrap?.chatReady || busy || loadingLibrary;
+  elements.ask.disabled = !bootstrap?.chatReady || busy || loadingLibrary || changingModel;
   elements.newTopic.disabled = busy || loadingLibrary;
   elements.prepareToggle.disabled = busy;
   elements.prepareDone.disabled = busy;
   elements.focusArticle.disabled = busy || loadingLibrary;
   elements.section.disabled = busy || loadingLibrary;
+  elements.model.disabled = !bootstrap?.modelSelectionAvailable || busy || loadingLibrary || openingCredentials || changingModel;
   elements.cancel.hidden = !busy;
   elements.ask.textContent = t(busy ? (pendingPhase === 'speech' ? 'waitingAudio' : 'asking') : audio.active ? 'ask' : 'startListening');
   elements.answer.classList.toggle('streaming', busy && requestId !== null);
-  elements.requestState.textContent = pendingPhase === 'speech' && busy ? t('waitingAudio') : '';
+  renderTiming();
   elements.emptyTitle.textContent = t(bootstrap?.chatReady ? 'ready' : 'connectTitle');
   elements.connectKey.hidden = Boolean(bootstrap?.chatReady);
-  elements.askKeyHint.hidden = !bootstrap?.chatReady;
+  elements.askKeyHint.hidden = !bootstrap?.chatReady || !bootstrap.config.hotkeys.ask;
   elements.connectKey.disabled = openingCredentials;
   elements.manageKey.disabled = openingCredentials;
 }
@@ -186,12 +212,16 @@ function renderSources(sources: SourcePassage[]): void {
 }
 
 function clearThreadView(): void {
+  finishTiming();
+  turnStartedAt = 0; turnEndedAt = 0; firstTokenAt = 0; serviceTier = '';
   ++askEpoch;
   pendingPhase = null;
   hasThread = false;
   busy = false;
   requestId = null;
   elements.answer.textContent = '';
+  elements.captureWarning.textContent = '';
+  elements.captureWarning.hidden = true;
   elements.emptyState.hidden = false;
   renderSources([]);
   updateActions();
@@ -208,34 +238,49 @@ function onEvent(event: PeekEvent): void {
       void ask();
       break;
     case 'answer-start':
-      requestId = event.requestId;
+      if (!busy || event.requestId !== requestId) break;
       pendingPhase = 'answer';
       busy = true;
       elements.emptyState.hidden = true;
       elements.answer.textContent = '';
+      elements.captureWarning.textContent = '';
+      elements.captureWarning.hidden = true;
       renderSources(event.sources);
       elements.responseArea.scrollTop = 0;
       updateActions();
       break;
+    case 'answer-warning':
+      if (!busy || event.requestId !== requestId) break;
+      elements.captureWarning.textContent = event.message;
+      elements.captureWarning.hidden = false;
+      break;
+    case 'answer-metadata':
+      if (event.requestId !== requestId || !busy) break;
+      serviceTier = event.serviceTier;
+      renderTiming();
+      break;
     case 'answer-delta': {
-      if (event.requestId !== requestId) break;
+      if (event.requestId !== requestId || !busy) break;
+      if (!firstTokenAt) firstTokenAt = Date.now();
       const follow = elements.responseArea.scrollHeight - elements.responseArea.scrollTop - elements.responseArea.clientHeight < 70;
       elements.answer.append(document.createTextNode(event.delta));
       if (follow) elements.responseArea.scrollTop = elements.responseArea.scrollHeight;
       break;
     }
     case 'answer-done':
-      if (event.requestId !== requestId) break;
+      if (!busy || event.requestId !== requestId) break;
       busy = false;
       pendingPhase = null;
       hasThread = elements.answer.textContent!.length > 0 || hasThread;
+      finishTiming();
       updateActions();
       break;
     case 'answer-error':
-      if (requestId !== null && event.requestId !== requestId) break;
+      if (!busy || event.requestId !== requestId) break;
       busy = false;
       pendingPhase = null;
       showNotice(event.message);
+      finishTiming();
       updateActions();
       break;
     case 'warning': showNotice(event.message); break;
@@ -260,39 +305,56 @@ function setPreparation(open: boolean): void {
 
 async function ask(): Promise<void> {
   if (!bootstrap?.chatReady) { showNotice(t('noKey')); void openCredentials(); return; }
-  if (busy || loadingLibrary) return;
+  if (busy || loadingLibrary || changingModel) return;
   if (!audio.active) {
     if (!bootstrap.transcriptionReady) { showNotice(t('noAudioKey')); void openCredentials(); return; }
     await audio.start(bootstrap.config.inputDeviceId);
-    if (audio.active) showNotice(t('listenFirst'));
+    if (audio.active) {
+      const shortcut = displayShortcut(bootstrap.config.hotkeys.ask);
+      showNotice(`${t('listenFirst')}${shortcut ? ` (${shortcut})` : ''}`);
+    }
     updateActions();
     return;
   }
   const epoch = ++askEpoch;
+  turnStartedAt = Date.now(); turnEndedAt = 0; firstTokenAt = 0; serviceTier = '';
+  const deadlineAt = turnStartedAt + FAST_LIMITS.turnMs;
   busy = true;
   pendingPhase = 'speech';
-  requestId = null;
+  requestId = crypto.randomUUID();
   showNotice('');
   setPreparation(false);
   updateActions();
+  timingTimer = setInterval(renderTiming, 100);
+  deadlineTimer = setTimeout(() => {
+    if (epoch !== askEpoch || !busy) return;
+    ++askEpoch;
+    busy = false; pendingPhase = null; requestId = null;
+    finishTiming();
+    showNotice(language === 'zh' ? '已到 10 秒时限。本次未完成，请重试。' : '10-second limit reached. This answer is incomplete; please retry.');
+    updateActions();
+    void window.peek.cancel().catch(() => {});
+  }, FAST_LIMITS.turnMs);
   try {
     const fresh = await audio.flush();
     if (epoch !== askEpoch) return;
     if (!fresh || !audio.active) {
       busy = false; pendingPhase = null;
-      showNotice(t('audioPending')); updateActions();
+      finishTiming();
+      showNotice(audio.lastError || t('audioPending')); updateActions();
       return;
     }
     pendingPhase = 'answer';
     updateActions();
     await window.peek.ask({
-      intent: '', followUp: hasThread, language,
+      requestId: requestId!, intent: '', followUp: hasThread, language, deadlineAt,
       ...(focusedDocumentId ? { focusDocumentId: focusedDocumentId } : {}),
       ...(elements.section.value ? { section: elements.section.value } : {}),
     });
   } catch (error) {
     if (epoch !== askEpoch) return;
     busy = false; pendingPhase = null;
+    finishTiming();
     showNotice(errorText(error)); updateActions();
   }
 }
@@ -302,7 +364,7 @@ const audio = new RollingAudio({
   status: (state, message) => {
     audioState = state;
     updateAudioLabels();
-    if (state !== 'recording' && pendingPhase === 'speech') { ++askEpoch; busy = false; pendingPhase = null; }
+    if (state !== 'recording' && pendingPhase === 'speech') { ++askEpoch; busy = false; pendingPhase = null; finishTiming(); }
     updateActions();
     elements.audioMessage.textContent = message || '';
     if (state === 'error') showNotice(message || t('audioFailed'));
@@ -321,7 +383,7 @@ const audio = new RollingAudio({
       elements.devices.append(row);
     }
   },
-});
+}, { chunkMilliseconds: FAST_LIMITS.audioChunkMs, flushTimeoutMilliseconds: FAST_LIMITS.transcriptMs });
 
 async function openCredentials(): Promise<void> {
   if (openingCredentials) return;
@@ -340,13 +402,15 @@ elements.newTopic.addEventListener('click', () => { clearThreadView(); showNotic
 elements.prepareToggle.addEventListener('click', () => setPreparation(elements.preparePanel.hidden));
 elements.prepareDone.addEventListener('click', () => setPreparation(false));
 elements.cancel.addEventListener('click', () => {
-  ++askEpoch; pendingPhase = null; busy = false;
+  const epoch = ++askEpoch; pendingPhase = null; busy = false; requestId = null;
+  finishTiming();
   updateActions();
   void window.peek.cancel().then(() => {
+    if (epoch !== askEpoch) return;
     busy = false;
     showNotice(t('stopped'));
     updateActions();
-  }).catch((error: unknown) => showNotice(errorText(error)));
+  }).catch((error: unknown) => { if (epoch === askEpoch) showNotice(errorText(error)); });
 });
 elements.audioToggle.addEventListener('click', () => {
   if (audio.active) audio.stop();
@@ -355,6 +419,18 @@ elements.audioToggle.addEventListener('click', () => {
 });
 elements.focusArticle.addEventListener('change', () => { focusedDocumentId = elements.focusArticle.value; clearThreadView(); updateScopeLabel(); });
 elements.section.addEventListener('change', () => { clearThreadView(); updateArticles(); });
+elements.model.addEventListener('change', () => {
+  if (!bootstrap) return;
+  const previous = bootstrap.config.model;
+  changingModel = true; updateActions();
+  void window.peek.setModel(elements.model.value).then(model => {
+    bootstrap!.config.model = model;
+    clearThreadView(); showNotice('');
+  }).catch((error: unknown) => {
+    elements.model.value = previous;
+    showNotice(errorText(error));
+  }).finally(() => { changingModel = false; updateActions(); });
+});
 
 async function loadLibrary(choose: boolean): Promise<void> {
   if (loadingLibrary) return;
@@ -379,7 +455,7 @@ elements.chooseLibrary.addEventListener('click', () => { void loadLibrary(true);
 elements.reloadLibrary.addEventListener('click', () => { void loadLibrary(false); });
 elements.languageToggle.addEventListener('click', () => { language = language === 'zh' ? 'en' : 'zh'; updateLanguage(); });
 
-window.addEventListener('beforeunload', () => { audio.stop(); });
+window.addEventListener('beforeunload', () => { finishTiming(); audio.stop(); });
 const unsubscribe = window.peek.onEvent(onEvent);
 window.addEventListener('beforeunload', unsubscribe);
 
@@ -387,10 +463,16 @@ async function init(): Promise<void> {
   updateActions();
   try {
     bootstrap = await window.peek.bootstrap();
+    if (![...elements.model.options].some(option => option.value === bootstrap!.config.model)) {
+      elements.model.add(new Option(bootstrap.config.model, bootstrap.config.model));
+    }
+    elements.model.value = bootstrap.config.model;
     language = bootstrap.config.language;
     updateLibrary(bootstrap.library);
     elements.askKey.textContent = displayShortcut(bootstrap.config.hotkeys.ask);
     updateLanguage();
+    elements.shortcutWarning.textContent = bootstrap.shortcutWarnings.join(' ');
+    elements.shortcutWarning.hidden = bootstrap.shortcutWarnings.length === 0;
     showNotice([...bootstrap.warnings, ...bootstrap.library.warnings].join(' '));
     updateActions();
     // Recording begins only after an explicit audio/answer action.

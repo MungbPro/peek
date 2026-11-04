@@ -1,5 +1,5 @@
 import type { App, BrowserWindow } from 'electron';
-import { safeStorage } from 'electron';
+import { safeStorage, systemPreferences } from 'electron';
 import type { EncryptionBackend } from './credentials';
 
 /** Refuse unsupported/plaintext backends; never downgrade credential storage. */
@@ -13,14 +13,26 @@ export function credentialEncryptionBackend(): EncryptionBackend {
 
 export function platformDefaults(): { interactionModifiers: string[]; primaryShortcutModifier: string } {
   return process.platform === 'darwin'
-    ? { interactionModifiers: ['Alt'], primaryShortcutModifier: 'Command' }
-    : { interactionModifiers: ['Alt'], primaryShortcutModifier: 'Control' };
+    ? { interactionModifiers: ['Shift'], primaryShortcutModifier: 'Command' }
+    : { interactionModifiers: ['Shift'], primaryShortcutModifier: 'Control' };
 }
 
 export function getPlatformPermissionHelp(): string {
   return process.platform === 'darwin'
     ? 'In System Settings → Privacy & Security, allow Microphone and Screen Recording for Electron/Peek, then restart Peek. Input Monitoring may be needed if your macOS configuration blocks modifier detection.'
     : 'Allow microphone access for desktop apps in Windows Privacy & security settings. Check that your selected recording device is enabled.';
+}
+
+/** Preflight known denials without suppressing macOS's first-use permission prompt. */
+export function screenRecordingDenied(): boolean {
+  if (process.platform !== 'darwin') return false;
+  try {
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    return status === 'denied' || status === 'restricted';
+  } catch {
+    // Let the actual capture provide its error if this status API is unavailable.
+    return false;
+  }
 }
 
 /** Keep native library names and platform-specific window behavior here. */
