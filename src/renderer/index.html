@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob:; object-src 'none'; base-uri 'none'" />
+    <title>Peek</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="overlay" aria-label="Peek assistant">
+      <header class="header">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>Peek</h1><span id="interaction" class="interaction">穿透</span></div>
+        <div class="header-actions"><button id="language-toggle" class="language-toggle" type="button" aria-label="Switch language">中 / EN</button><button id="audio-toggle" class="audio-toggle" type="button" aria-pressed="false"><span class="status-dot"></span><span id="audio-label">开启音频</span></button></div>
+      </header>
+
+      <div id="notice" class="notice" role="status" hidden></div>
+
+      <details id="library-panel" class="library-panel">
+        <summary><span class="library-heading"><span id="library-label">文库</span><span id="scope-label">未连接</span></span><span class="disclosure" aria-hidden="true">⌄</span></summary>
+        <div class="library-controls">
+          <div class="library-actions"><span id="library-count">Markdown / TXT</span><button id="choose-library" class="text-button" type="button">打开文库</button><button id="reload-library" class="text-button" type="button" disabled>刷新</button></div>
+          <select id="section" aria-label="搜索范围"><option value="">全部文库</option></select>
+        </div>
+      </details>
+
+      <section class="focus-controls" aria-label="Article in focus"><input id="article-search" type="search" placeholder="查找文章…" aria-label="查找文章" autocomplete="off" /><select id="focus-article" aria-label="当前文章"><option value="">选择当前文章</option></select></section>
+
+      <section id="response-area" class="response-area" aria-label="Answer">
+        <div id="empty-state" class="empty-state">
+          <h2 id="empty-title">随时提问。</h2>
+          <div class="empty-key"><kbd id="ask-key">⌘ ⇧ Space</kbd></div>
+        </div>
+        <div id="answer" class="answer" role="log" aria-live="polite" aria-relevant="additions text"></div>
+        <details id="sources-panel" class="sources-panel" hidden><summary id="sources-label">关联</summary><div id="sources"></div></details>
+      </section>
+
+      <section class="composer" aria-label="Ask Peek">
+        <label class="sr-only" for="intent">Question or instruction</label>
+        <textarea id="intent" rows="2" maxlength="4000" placeholder="输入问题，或直接提问…" spellcheck="false"></textarea>
+        <div class="composer-actions"><span id="request-state" class="request-state"></span><button id="cancel" class="text-button" type="button" hidden>停止</button><button id="follow-up" class="secondary-button" type="button">追问</button><button id="ask" class="primary-button" type="button">提问 ↗</button></div>
+      </section>
+
+      <footer class="footer"><span id="hold-hint">按住 ⌘ Option 操作</span><details id="audio-details" class="audio-details"><summary id="audio-state">音频关闭</summary><div class="diagnostics"><strong id="audio-input-label">音频输入</strong><p id="audio-message"></p><div id="devices">开启音频后显示设备。</div></div></details></footer>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

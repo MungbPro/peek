@@ -1,0 +1,56 @@
+appId: local.peek.assistant
+productName: Peek
+copyright: Copyright © 2026 Peek contributors
+
+directories:
+  output: release
+  buildResources: assets
+
+# An allowlist keeps personal vaults, recordings, and development files out of
+# every package. Production dependencies are collected by electron-builder.
+files:
+  - dist/**/*
+  - assets/**/*
+  - package.json
+  - LICENSE
+  - README.md
+  - HONESTY.md
+  - '!**/*.map'
+  - '!**/.env'
+  - '!**/.env.*'
+  - '!**/config.json'
+  - '!**/tests/**'
+  - '!**/test/**'
+  - '!**/artifacts/**'
+  - '!**/.obsidian/**'
+
+asar: true
+asarUnpack:
+  - node_modules/koffi/**/*
+  - node_modules/@koromix/koffi-*/**/*
+  - '**/*.node'
+
+npmRebuild: true
+afterPack: scripts/after-pack.cjs
+forceCodeSigning: false
+publish: null
+artifactName: Peek-${version}-macOS-${arch}-unsigned.${ext}
+
+mac:
+  icon: assets/icon.icns
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  identity: null
+  hardenedRuntime: false
+  notarize: false
+  gatekeeperAssess: false
+  extendInfo:
+    LSUIElement: true
+    NSMicrophoneUsageDescription: Peek transcribes the selected audio input to provide context for your questions.
+    NSScreenCaptureUsageDescription: Peek captures your display when you ask a question and sends the image to your configured AI provider.
+
+dmg:
+  title: Peek ${version} (${arch})
+  sign: false

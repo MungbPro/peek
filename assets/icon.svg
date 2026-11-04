@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Peek">
+  <rect x="80" y="80" width="864" height="864" rx="196" fill="#181d1c"/>
+  <path fill="#c8e8ae" d="M512 298A214 214 0 0 1 726 512A214 214 0 0 1 512 726H342A44 44 0 0 1 298 682V512A214 214 0 0 1 512 298Z"/>
+  <path fill="#181d1c" d="M512 362A150 150 0 0 1 662 512A150 150 0 0 1 512 662H372A10 10 0 0 1 362 652V512A150 150 0 0 1 512 362Z"/>
+  <circle cx="512" cy="486" r="48" fill="#c8e8ae"/>
+</svg>

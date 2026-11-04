@@ -1,0 +1,51 @@
+name: Prepare unsigned release artifacts
+
+# Manual preparation only. This workflow does not create a GitHub Release,
+# upload source data, use API keys, sign, notarize, or publish automatically.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error("Runner architecture mismatch");'
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:mac:${{ matrix.arch }}
+      - name: Create checksums
+        run: |
+          cd release
+          shasum -a 256 Peek-*-unsigned.dmg Peek-*-unsigned.zip > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Peek-macOS-${{ matrix.arch }}-unsigned-release
+          path: |
+            release/Peek-*-unsigned.dmg
+            release/Peek-*-unsigned.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

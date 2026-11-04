@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, tests, renderer build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  package-mac:
+    name: Unsigned macOS (${{ matrix.arch }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            appDirectory: release/mac-arm64/Peek.app
+          - arch: x64
+            runner: macos-15-intel
+            appDirectory: release/mac/Peek.app
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error("Runner architecture mismatch");'
+      - run: npm ci
+      - run: npm test
+      - name: Build unsigned package
+        run: npm run package:mac:${{ matrix.arch }}
+      - name: Check packaged binary and native addon
+        env:
+          APP_DIR: ${{ matrix.appDirectory }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          file "$APP_DIR/Contents/MacOS/Peek"
+          ELECTRON_RUN_AS_NODE=1 "$APP_DIR/Contents/MacOS/Peek" -e '
+            const assert = require("node:assert/strict");
+            const path = require("node:path");
+            assert.equal(process.arch, process.env.EXPECTED_ARCH);
+            const koffi = require(path.resolve(process.env.APP_DIR, "Contents/Resources/app.asar/node_modules/koffi"));
+            const cg = koffi.load("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics");
+            const flags = cg.func("uint64_t CGEventSourceFlagsState(int stateID)");
+            assert.equal(typeof Number(flags(0)), "number");
+            console.log("Packaged native module loaded on " + process.arch);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Peek-macOS-${{ matrix.arch }}-unsigned
+          path: |
+            release/Peek-*-unsigned.dmg
+            release/Peek-*-unsigned.zip
+          if-no-files-found: error
+          retention-days: 14
