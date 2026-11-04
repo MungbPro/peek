@@ -1,10 +1,13 @@
 {
   "name": "peek",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Local desktop context assistant with an Obsidian library",
   "author": "Peek contributors",
-  "repository": { "type": "git", "url": "https://github.com/MungbPro/peek.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MungbPro/peek.git"
+  },
   "main": "dist/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",

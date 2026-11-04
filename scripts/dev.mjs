@@ -23,7 +23,7 @@ function restart() {
   child.kill();
 }
 const ctx = await context({
-  entryPoints: { main: 'src/main/main.ts', preload: 'src/main/preload.ts' },
+  entryPoints: { main: 'src/main/main.ts', preload: 'src/main/preload.ts', 'setup-preload': 'src/main/setup-preload.ts' },
   outdir: 'dist', outExtension: { '.js': '.cjs' }, bundle: true,
   platform: 'node', target: 'node20', format: 'cjs', external: ['electron', 'koffi'],
   sourcemap: true,

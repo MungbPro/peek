@@ -33,6 +33,12 @@ summary::-webkit-details-marker { display: none; }
 .library-controls { max-height: 180px; overflow: auto; padding: 0 10px 10px; display: grid; gap: 5px; border-top: 1px solid #ffffff0b; }
 .focus-controls { display: grid; grid-template-columns: 107px minmax(0, 1fr); gap: 7px; margin: 8px 14px 0; }
 .focus-controls input, .focus-controls select { padding: 7px 6px; }
+.context-toolbar { display: flex; gap: 12px; align-items: center; margin: 0 16px; padding: 9px 0 11px; border-bottom: 1px solid #ffffff0e; }
+#prepare-toggle { flex: 0 0 auto; font-size: 11px; }
+#focused-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #9eada1; font-size: 10px; }
+.prepare-panel { display: grid; gap: 8px; flex: 0 0 auto; margin: 10px 14px 0; padding: 10px; background: #ffffff04; border: 1px solid #ffffff14; border-radius: 9px; }
+.prepare-panel select { padding: 8px; }
+#prepare-done { justify-self: end; min-width: 60px; }
 .library-actions { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 #library-count { flex: 1; color: #849287; font-size: 10px; }
 .text-button { background: transparent; padding: 3px 0; color: #bcccb8; font-size: 11px; white-space: nowrap; }
@@ -46,6 +52,7 @@ select, input { width: 100%; min-width: 0; background: #151b18; color: #d8e2d8; 
 h2 { margin: 9px 0 10px; font-size: 22px; font-weight: 500; letter-spacing: -.8px; }
 .empty-state p { font-size: 12px; color: #99a59d; line-height: 1.6; max-width: 290px; margin: 0; }
 .empty-key { display: flex; gap: 10px; align-items: center; margin-top: 21px; font-size: 10px; color: #88988d; }
+.connect-key { margin-top: 15px; padding: 9px 14px !important; font-size: 12px !important; }
 kbd { border: 1px solid #ffffff19; background: #ffffff04; color: #c4d2c5; font-family: inherit; padding: 4px 6px; border-radius: 4px; }
 .answer { font-size: 15px; font-weight: 400; line-height: 1.6; letter-spacing: -.1px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .answer.streaming::after { content: ''; display: inline-block; width: 5px; height: 14px; background: #c6e5ae; margin-left: 3px; vertical-align: -2px; animation: blink 1s steps(2, start) infinite; }
@@ -62,6 +69,11 @@ kbd { border: 1px solid #ffffff19; background: #ffffff04; color: #c4d2c5; font-f
 textarea { width: 100%; display: block; padding: 10px 11px 4px; resize: none; height: 53px; background: transparent; color: #e4ece2; border: 0; outline-offset: -2px !important; line-height: 1.5; font-size: 12px; }
 textarea::placeholder, input::placeholder { color: #718275; }
 .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 5px 8px 8px; }
+.voice-controls { flex: 0 0 auto; margin: 0 14px; }
+.voice-controls .composer-actions { padding: 0; gap: 10px; }
+.voice-controls .secondary-button { min-height: 43px; padding: 9px 13px; }
+.voice-controls .voice-answer { flex: 1; min-height: 43px; font-size: 14px; }
+.voice-controls .request-state { min-height: 18px; padding: 0 1px 6px; }
 .request-state { margin-right: auto; color: #7f9283; font-size: 9px; white-space: nowrap; }
 .primary-button, .secondary-button { padding: 6px 10px; border-radius: 6px; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .primary-button { background: #cce7b6; color: #1d2b18; }
@@ -70,6 +82,8 @@ textarea::placeholder, input::placeholder { color: #718275; }
 .secondary-button { background: #ffffff08; color: #b7c5b8; border: 1px solid #ffffff0e; }
 .secondary-button:hover:not(:disabled) { background: #ffffff10; }
 .footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex: 0 0 auto; padding: 10px 17px 11px; color: #7d9082; font-size: 9px; }
+.footer-key { padding: 0; background: transparent; color: #a9bfa2; font-size: 9px; white-space: nowrap; }
+.footer-key:hover:not(:disabled) { color: #d9e9d0; }
 .audio-details > summary { color: #9bad9e; }
 .diagnostics { position: absolute; z-index: 3; right: 21px; bottom: 42px; width: calc(100% - 42px); max-height: 270px; overflow: auto; padding: 13px; background: #202923; border: 1px solid #677560; border-radius: 10px; box-shadow: 0 5px 24px #0008; font-size: 11px; line-height: 1.5; color: #bdcbbb; }
 .diagnostics strong { color: #e2eddd; font-weight: 600; }

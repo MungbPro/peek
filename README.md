@@ -1,6 +1,6 @@
 # Peek
 
-桌面上的轻量 AI 助手：读取当前屏幕、最近的语音和本地 Obsidian 文章，给出简短回答。macOS 优先，支持 Apple Silicon 和 Intel 构建。Electron 30 + TypeScript + Vite，界面为原生 TypeScript/CSS，默认中文，可切换英文。[MIT 开源许可](LICENSE)。
+对话中的轻量 AI 助手：听取最近的语音，结合当前屏幕和本地 Obsidian 文章，按一次快捷键给出简短回答。macOS 优先，支持 Apple Silicon 和 Intel 构建。Electron 30 + TypeScript + Vite，界面为原生 TypeScript/CSS，默认中文，可切换英文。[MIT 开源许可](LICENSE)。
 
 [下载 macOS 预览版 / Downloads](https://github.com/MungbPro/peek/releases) · [English](#english-quick-guide)
 
@@ -8,49 +8,52 @@
 
 ## 60 秒开始
 
-需要 Node.js 22.12+、npm 和一个可用的 OpenAI API key。安装下载、首次系统授权可能超过一分钟。
+1. [下载 Peek](https://github.com/MungbPro/peek/releases)：M 系列 Mac 选 `arm64`，Intel Mac 选 `x64`，解压或安装后打开。
+2. 首次启动会打开密钥设置窗口。点击“获取 OpenAI 密钥”进入官方平台，创建自己的 API key，然后粘贴到输入框。
+3. 点击“验证并保存”，成功后点击“完成”。也可选择“仅保存”，稍后再验证。保存立即生效，不用重启。
+
+设置窗口可以直接点击，不用按住修饰键。密钥默认隐藏，提交后清空输入框；之后只显示连接状态，不会回显已保存的密钥。随时可从托盘的“API 密钥”菜单更换或删除。**不需要创建或编辑 `.env`。** 安装下载和首次系统授权可能超过一分钟。
+
+“验证并保存”只检查 API 连接与认证，不保证余额、模型调用或语音权限；验证请求不包含截图、录音或文章。仅保存时不会发起验证请求。
+
+Peek 使用你自己的 OpenAI API key 和 API 组织额度。ChatGPT 订阅本身不会配置 Peek；符合条件的 Pro/Business 用户可按官方说明领取并关联 [API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)。密钥可从 [OpenAI API Platform](https://platform.openai.com/api-keys) 创建。
+
+首次使用时允许麦克风和屏幕录制。密钥管理会暂停正在进行的回答和音频。保存后先开启收音，听完问题再按一次 `Option + Space` 获取回答；对话中不用输入文字。未配置 key 时仍可查看本地资料库。
+
+开发者从源码启动需要 Node.js 22.12+ 和 npm，同样可以在窗口中输入 key：
 
 ```sh
 git clone https://github.com/MungbPro/peek.git
 cd peek
 npm install
-cp .env.example .env
-```
-
-编辑项目根目录的 `.env`，填入自己的 key：
-
-```dotenv
-OPENAI_API_KEY=your_api_key_here
-```
-
-```sh
 npm run dev
 ```
 
-从 [OpenAI API Platform](https://platform.openai.com/api-keys) 创建 key。Peek 使用 API key 和 API 组织额度，不使用 ChatGPT 登录。ChatGPT 订阅本身不会配置 Peek；符合条件的 Pro/Business 用户可按官方说明领取并关联 [API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits)。
+## 对话时怎么用
 
-首次运行允许麦克风和屏幕录制。配置了转写 key 后，Peek 会启动音频采集；点击音频按钮可暂停。未配置 key 时仍可打开界面、选择和查看本地资料库。
+开始前，在“准备”中选择文库和主讲文章，并确认正在收音。对方说完问题后，按 **`Option + Space`**，或按住 `Option` 点击大的回答按钮。Peek 会结合最近语音、截图和相关资料作答。
 
-## 操作
+接着交流，再按同一个快捷键即可追问，不用区分“提问”和“追问”。换一个话题时点击“新话题”，清除此前的问答线程。对话界面没有问题输入框。
 
-窗口为 420 × 520，默认显示在主屏右上角，置顶、透明且鼠标穿透。没有 Dock 图标，通过菜单栏托盘退出或打开配置。
-
-| 操作 | macOS 默认快捷键 |
+| 操作 | macOS 默认按键 |
 | --- | --- |
-| 新问题：截图 + 最近语音 + 本地相关段落 | `⌘ ⇧ Space` |
-| 隐藏 / 显示 | `⌘ ⇧ H` |
-| 在当前对话追问 | `⌘ ⇧ Enter` |
-| 临时允许鼠标点击 | 按住 `⌘ ⌥` |
-| 退出输入焦点 | `Escape` |
+| 根据当前对话回答；再次按下继续追问 | `Option + Space` |
+| 隐藏 / 显示 | `Option + H` |
+| 临时允许鼠标点击 | 按住 `Option` |
+| 清除之前的问答 | 点击“新话题” |
 
-输入问题时，按住 `⌘ ⌥` 点击输入框，然后松开修饰键正常打字。松开后恢复鼠标穿透，键盘焦点保留到按 `Escape` 或切换应用。隐藏窗口不会暂停音频。Windows 默认用 `Ctrl` 替代 `⌘`，交互修饰键为 `Ctrl + Alt`。
+收音不会随启动自动开始；如果尚未收音，第一次按主按钮只开启收音；说完问题后再按一次，才会请求回答。Peek 不会仅因为检测到语音就自动生成回答。按下回答会提交尚未结束的音频片段，最多等 7 秒取得转写；未完成时会提示稍后再按，本次不会请求模型回答。
+
+窗口为 420 × 520，默认在主屏右上角置顶并鼠标穿透。松开 `Option` 后恢复穿透。隐藏窗口不会暂停音频。托盘可管理密钥、打开配置或退出。Windows 对应使用 `Alt`；Windows 实机行为尚未完整验证。
+
+高级用户仍可在配置中保留单独的追问快捷键，默认 `Alt+Enter`；常用界面不需要它。升级时会迁移旧版本完全匹配的默认按键，自定义按键保持不变。
 
 ## Obsidian：主文章 + 相关资料
 
-1. 打开资料库区域，选择 Obsidian vault 文件夹。直接读取 `.md`、`.markdown`、`.txt`，不复制或修改原文。
-2. 选择当前主讲文章，保留“全部资料库”范围。Peek 优先选取主文章段落，同时寻找其他文章中的相关证据。
-3. 需要缩小范围时选一个章节。章节对应 vault 的第一层文件夹；章节过滤会限制检索范围。
-4. 提问后展开来源，查看文件路径、原文行号和摘录；点击来源可在默认应用打开文章。Obsidian 改完文件后点击重新载入。
+1. 演讲或对话开始前展开“准备”，选择 Obsidian vault 文件夹。直接读取 `.md`、`.markdown`、`.txt`，不复制或修改原文。
+2. 在下拉列表选当前主讲文章，不用打字搜索。保留“全部资料库”范围，Peek 会优先选取主文章段落，同时寻找其他文章中的相关证据。
+3. 需要缩小范围时选一个章节。章节对应 vault 的第一层文件夹；章节过滤会限制检索范围。准备好后收起面板。
+4. 回答后展开来源，查看文件路径、原文行号和摘录；点击来源可打开文章。Obsidian 改完文件后点击重新载入。
 
 回答先围绕主文章，再关联资料库证据。模型也可补充一般文学背景，提示词要求把这部分标为“常识 / Background”；它并不等于资料库中的已核实结论。
 
@@ -84,9 +87,21 @@ npm run dev
 ~/Library/Application Support/Peek/config.json
 ```
 
-Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/Peek`）；通过托盘打开文件可避免猜测路径。配置中只放设置，key 放 `.env`。
+Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/Peek`）；通过托盘打开文件可避免猜测路径。`config.json` 只放模型、设备和快捷键等设置，密钥通过应用内窗口管理。
 
-安装版通过 Finder 启动时，把 `.env` 放在 `config.json` 同一目录，填入 key 后重启。例如 macOS 为 `~/Library/Application Support/Peek/.env`。开发版先读取项目根目录的 `.env`，再读取用户目录中的 `.env` 作为补充；已由外部环境设置的变量优先。`.env` 不会打包到安装包。
+### 密钥保存
+
+密钥通过 Electron `safeStorage` 加密后保存在用户目录的 `credentials.enc`。Mac 的加密密钥由系统钥匙串保护，Windows 使用 DPAPI。系统加密不可用时，Peek 会拒绝保存，不会退回明文文件。未签名应用更新后，macOS 可能再次询问钥匙串访问权限；详见 [Electron safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage)。
+
+若无法读取已保存密钥，先解锁系统钥匙串并退出、重启 Peek；应用会保留原加密文件，不会自动覆盖。
+
+每条已保存密钥绑定对应的 API 地址与凭据名称。更改 API 地址后，需要为新地址重新设置密钥。聊天与转写使用同一配置时，只需输入一次；使用不同服务时，设置窗口会分别显示目标地址。
+
+在 Peek 中删除密钥后，旧 `.env` 或环境变量中的对应密钥不会自动重新启用。删除只影响 Peek，不会撤销供应商平台上的 key，也不会修改你的 `.env` 文件；需要撤销时请到官方平台操作。
+
+### 可选：环境变量
+
+已有 `.env` 的高级用户仍可继续使用。应用内保存的密钥优先。开发版先读取项目根目录的 `.env`，再读取用户目录中的 `.env`；外部进程环境优先于这两个文件。安装版可读取 `config.json` 同目录的 `.env`。这些文件中的 key 是明文，请自行保护；它们不会打包到安装包。
 
 ```json
 {
@@ -95,11 +110,11 @@ Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/
   "inputDeviceId": "",
   "transcriptWindowSeconds": 30,
   "hotkeys": {
-    "ask": "CommandOrControl+Shift+Space",
-    "toggle": "CommandOrControl+Shift+H",
-    "followUp": "CommandOrControl+Shift+Enter"
+    "ask": "Alt+Space",
+    "toggle": "Alt+H",
+    "followUp": "Alt+Enter"
   },
-  "interactionModifiers": ["Command", "Alt"],
+  "interactionModifiers": ["Alt"],
   "chat": {
     "baseUrl": "https://api.openai.com/v1",
     "apiKeyEnv": "OPENAI_API_KEY",
@@ -118,7 +133,7 @@ Windows 使用 Electron 的 `app.getPath('userData')`（通常位于 `%APPDATA%/
 
 ### 中国大陆可选模型
 
-OpenAI 不是唯一支持图片的 API。阿里云百炼的 Qwen-VL 提供 OpenAI 兼容多模态接口。可在 `.env` 加入 `DASHSCOPE_API_KEY`，并只更改以下聊天配置：
+OpenAI 不是唯一支持图片的 API。阿里云百炼的 Qwen-VL 提供 OpenAI 兼容多模态接口。更改以下聊天配置并重启后，在“API 密钥”窗口为该聊天地址填写百炼 key：
 
 ```json
 {
@@ -133,7 +148,7 @@ OpenAI 不是唯一支持图片的 API。阿里云百炼的 Qwen-VL 提供 OpenA
 
 以上是北京地域的兼容地址示例；不同地域、工作空间的 key 和地址可能不同，请以自己控制台及 [Qwen-VL 官方文档](https://www.alibabacloud.com/help/zh/model-studio/qwen-vl-compatible-with-openai) 为准。官方也推荐工作空间专用地址 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。Qwen3-VL 示例使用 `max_tokens`；OpenAI 默认使用 `max_completion_tokens`，由 `chat.tokenLimitParameter` 选择，参见[百炼参数说明](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)。
 
-这只切换截图问答，不会让 Qwen-VL 自动提供 Whisper 转写。转写有独立配置，需另行验证提供方的接口兼容性；也可暂停音频，只用屏幕、手动问题和资料库。尚未用中国大陆网络或真实百炼 key 做端到端验证。**API 在网络上可访问，不代表模型会搜索互联网；Peek 当前没有网页搜索功能。**
+这只切换问答模型，不会让 Qwen-VL 自动提供 Whisper 转写。语音转写有独立配置，需另行验证提供方的接口兼容性。尚未用中国大陆网络或真实百炼 key 做端到端验证。**API 在网络上可访问，不代表模型会搜索互联网；Peek 当前没有网页搜索功能。**
 
 ## 开发、检查与打包
 
@@ -149,21 +164,25 @@ npm run package:mac:x64    # Intel
 
 macOS 安装包未签名、未公证；首次打开可能需要在系统设置中允许。分别生成两个架构的构建，不表示已在两种真实机器上完成麦克风、屏幕共享和音频路由测试。原生平台代码集中在 `src/main/platform.ts`。
 
-API key 仅在主进程加载，renderer 通过受限 IPC 请求转写和聊天。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引、对话和滚动转写仅在内存中，应用不主动把音频写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交 `.env` 或私人 vault。
+输入的 API key 会短暂存在于独立、沙盒化的设置窗口，通过受限 IPC 交给主进程后清空。已保存的密钥不会回传到界面；解密与 API 请求均在主进程完成。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引、对话和滚动转写仅在内存中，应用不主动把音频写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交密钥文件或私人 vault。
 
-已验证：20 项本地测试、实际 Electron 启动与隔离、中文/英文界面、模拟截图至回答及追问的完整 IPC 流程、Chromium 生成独立 WebM 音频文件。Apple Silicon 安装版与 Rosetta 下的 Intel 安装版均通过启动检查；GitHub CI 的两个原生架构构建及原生模块加载也已通过。真实 API、实体麦克风、屏幕录制授权和观众端隐藏仍需实测。
+验证需覆盖本地逻辑、实际 Electron 启动与隔离、中文/英文界面、模拟问答与追问、音频分块，以及密钥保存、删除和不可用状态。测试使用模拟服务与合成数据；真实 API、实体麦克风、屏幕录制授权和观众端隐藏仍需实测。各版本的具体结果见发布说明。
 
 ## English quick guide
 
 Peek is a local desktop overlay for screen context, recent speech, and an Obsidian Markdown library. The UI defaults to Chinese; click `中 / EN` for this session, or set `language` to `en` in the tray-opened config for an English default. It uses OpenAI API keys, not ChatGPT sign-in.
 
-With Node.js 22.12+: run `npm install`, copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and run `npm run dev`. Grant Microphone and Screen Recording permissions to Electron/Peek, then restart. Audio starts when a transcription key is configured; use the audio button to pause.
+Download the `arm64` build for an M-series Mac or `x64` for Intel. The first-run key window is directly clickable: paste your key, choose **Verify and save**, then **Done**. **Save only** skips the network check. No `.env` editing or restart is required. The tray’s API key item lets you replace or remove it later. Verification checks connection/authentication only, not billing, model calls, or speech permissions.
 
-For an installed app, put `.env` beside the tray-opened `config.json` in the user-data directory, then restart. On macOS this is `~/Library/Application Support/Peek/.env`. Keys are not included in builds.
+Saved credentials are encrypted with Electron `safeStorage` in `credentials.enc`. macOS protects the encryption key in Keychain; Windows uses DPAPI. Peek refuses plaintext fallback. Input briefly exists in the isolated setup renderer and is cleared after submission; stored keys are never returned to the renderer. Removing a key also disables its old environment fallback in Peek, but does not revoke it at the provider or edit an existing `.env`.
 
-Hold **Cmd+Option** to click the overlay. Click the intent field, release the modifiers, and type. **Escape** returns focus. **Cmd+Shift+Space** asks a new question, **Cmd+Shift+Enter** follows up, and **Cmd+Shift+H** toggles visibility. Hiding does not pause audio.
+For source development, use Node.js 22.12+, run `npm install` and `npm run dev`, then use the same key window. Existing `.env` setups remain optional; saved app credentials take precedence. Grant Microphone and Screen Recording permissions when requested. Opening key management pauses active answers and audio. Recording starts only after an explicit audio or answer action, including after a normal launch; the audio button pauses it.
 
-Choose your local vault, focus the article being presented, and leave the scope on the whole library to include supporting sources. A section filter narrows retrieval. Sources include paths and line numbers. Reload after editing notes. Retrieval is lexical: bilingual aliases help, but cross-language synonyms are not automatically translated.
+Before the conversation, choose a vault and article from the **Prepare** dropdowns and start listening. After a spoken question, press **Option+Space** for an answer. Press the same shortcut for subsequent follow-ups; **New topic** clears the previous Q&A thread. There is no question textbox. If audio is off, the first press starts listening; press again after the question to request an answer. Speech alone never triggers an answer. Pressing Answer flushes the current clip and waits up to seven seconds for transcription. If it is not ready, Peek asks you to press again later and does not call the model for that press.
+
+Hold **Option** to click the overlay, including its large answer button. **Option+H** toggles visibility; hiding does not pause audio. Windows uses **Alt**, with hardware behavior still unverified. The optional explicit follow-up shortcut remains **Alt+Enter** in config. Upgrades migrate the old exact defaults while preserving customized shortcuts.
+
+Choose the article before presenting and leave the scope on the whole library to include supporting sources. A section filter narrows retrieval. Sources include paths and line numbers. Reload after editing notes. Retrieval is lexical: bilingual aliases help, but cross-language synonyms are not automatically translated.
 
 For other-party playback audio, route output through a BlackHole multi-output device plus headphones, then select BlackHole’s input ID in config. Microphone mixing requires separate routing. Chat can use a compatible Qwen-VL endpoint; transcription is configured independently. No web search is implemented.
 

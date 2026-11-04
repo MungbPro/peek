@@ -5,10 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
 import { defaultConfig, loadConfig, publicConfig, saveConfig, type Config } from './config';
-import { configureApplication, configureOverlay, getConfigDirectory, platformDefaults, startModifierMonitor } from './platform';
+import { configureApplication, configureOverlay, credentialEncryptionBackend, getConfigDirectory, platformDefaults, startModifierMonitor } from './platform';
 import { KnowledgeLibrary } from './library';
 import { TranscriptBuffer } from './transcript';
-import { contextText, hasKey, streamAnswer, systemPrompt, transcribeAudio, type ChatMessage } from './provider';
+import { contextText, hasKey, setCredentialResolver, streamAnswer, systemPrompt, transcribeAudio, type ChatMessage } from './provider';
+import { CredentialStore } from './credentials';
+import { CredentialService } from './credential-service';
 import type { AskRequest, AudioChunk, AudioStatus, PeekEvent } from '../shared/types';
 
 app.setName('Peek');
@@ -16,7 +18,13 @@ if (process.env.PEEK_TEST_USER_DATA) app.setPath('userData', process.env.PEEK_TE
 const devUrl = process.env.PEEK_DEV_URL;
 if (devUrl && devUrl !== 'http://127.0.0.1:5173') throw new Error('PEEK_DEV_URL must be the local Vite server.');
 const smoke = process.argv.includes('--smoke-test');
+const syntheticAudio = smoke && process.argv.includes('--use-fake-device-for-media-stream');
 let win: BrowserWindow;
+let setupWindow: BrowserWindow | undefined;
+let openingSetup: Promise<void> | undefined;
+let credentialStore: CredentialStore;
+let credentialService: CredentialService;
+let credentialLoadError = false;
 let tray: Tray;
 let config: Config;
 let configPath = '';
@@ -25,6 +33,7 @@ let stopMonitor: (() => void) | undefined;
 let transcriptTimer: ReturnType<typeof setInterval> | undefined;
 let desiredVisible = true;
 let capturing = false;
+let activeCapture: Promise<string> | undefined;
 let audioRecording = false;
 let audioGeneration = 0;
 let audioController: AbortController | undefined;
@@ -59,6 +68,69 @@ function stopAudio(): void {
 function cancelAnswer(): void {
   activeRequest?.controller.abort();
   activeRequest = undefined;
+}
+
+function credentialReadiness(): { chatReady: boolean; transcriptionReady: boolean } {
+  const enabled = configValid && !setupWindow && !openingSetup;
+  return { chatReady: enabled && hasKey(config.chat), transcriptionReady: enabled && (!smoke || syntheticAudio) && hasKey(config.transcription) };
+}
+
+function pauseForCredentials(blockUsage = Boolean(setupWindow || openingSetup)): void {
+  const id = activeRequest?.id;
+  cancelAnswer(); stopAudio();
+  if (id) send({ type: 'answer-error', requestId: id, message: config.language === 'zh' ? '已暂停，请先完成密钥设置。' : 'Paused while API key settings are open.' });
+  history = []; lastIntent = '';
+  send({ type: 'credentials-changed', ...(blockUsage ? { chatReady: false, transcriptionReady: false } : credentialReadiness()) });
+}
+
+/** Separate renderer: no overlay/capture capabilities, no stored-key readback. */
+async function openCredentials(): Promise<void> {
+  if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); return; }
+  if (openingSetup) return openingSetup;
+  openingSetup = (async () => {
+    pauseForCredentials(true);
+    // A capture already underway must finish before a secret input can appear.
+    if (activeCapture) await activeCapture.catch(() => {});
+    try { await credentialStore.load(); credentialLoadError = false; }
+    catch { credentialLoadError = true; }
+    const window = new BrowserWindow({
+      width: 460, height: 560, useContentSize: true, title: 'Peek', show: false,
+      backgroundColor: '#171d1a', resizable: false, minimizable: false, maximizable: false,
+      fullscreenable: false, autoHideMenuBar: true, alwaysOnTop: true,
+      webPreferences: { preload: join(__dirname, 'setup-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, partition: 'peek-setup-memory' },
+    });
+    setupWindow = window;
+    window.setContentProtection(true);
+    window.setMenu(null);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.on('will-navigate', event => event.preventDefault());
+    window.webContents.on('will-attach-webview', event => event.preventDefault());
+    window.webContents.session.setPermissionCheckHandler(() => false);
+    window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    window.on('closed', () => {
+      credentialService.cancel();
+      if (setupWindow === window) setupWindow = undefined;
+      send({ type: 'credentials-changed', ...credentialReadiness() });
+    });
+    window.once('ready-to-show', () => { window.show(); window.focus(); });
+    if (devUrl) await window.loadURL(`${devUrl}/setup.html`); else await window.loadFile(join(__dirname, 'renderer/setup.html'));
+  })();
+  try { await openingSetup; } finally { openingSetup = undefined; }
+}
+
+function credentialState(): ReturnType<CredentialService['state']> {
+  return {
+    ...credentialService.state(),
+    ...(credentialLoadError ? { storageError: config.language === 'zh' ? '无法读取已保存的密钥。请解锁系统钥匙串，再重新打开此窗口。' : 'Saved credentials could not be opened. Unlock the system key store and reopen this window.' } : {}),
+  };
+}
+
+function setupHandle<T>(channel: string, fn: (arg: T) => unknown): void {
+  ipcMain.handle(channel, (event, arg: T) => {
+    const expected = devUrl ? `${devUrl}/setup.html` : pathToFileURL(join(__dirname, 'renderer/setup.html')).href;
+    if (!setupWindow || event.sender !== setupWindow.webContents || event.senderFrame !== setupWindow.webContents.mainFrame || event.senderFrame.url !== expected) throw new Error('Untrusted credential IPC sender.');
+    return fn(arg);
+  });
 }
 
 function trusted(event: Electron.IpcMainInvokeEvent): void {
@@ -105,17 +177,19 @@ async function captureDisplay(): Promise<string> {
 }
 
 async function ask(request: AskRequest): Promise<void> {
+  if (setupWindow || openingSetup) throw new Error('Finish API key settings before asking a question.');
   if (!configValid) throw new Error('Fix config.json from the tray menu and restart Peek before asking.');
   if (loadingLibrary) throw new Error('Wait for the library to finish loading.');
   if (capturing) throw new Error('The previous screen capture is still finishing. Try again in a moment.');
   if (activeRequest) throw new Error('Stop the current answer before asking again.');
-  if (!hasKey(config.chat)) throw new Error(`Add ${config.chat.apiKeyEnv} to .env and restart Peek.`);
+  if (!hasKey(config.chat)) throw new Error('Open API Key settings in Peek to connect your provider.');
   if (request.followUp && !history.length) throw new Error('Ask a first question before following up.');
+  const transcript = transcripts.recent(config.transcriptWindowSeconds);
+  if (!request.intent.trim() && !transcript.trim()) throw new Error(config.language === 'zh' ? '还没有识别到语音，请确认收音后再试。' : 'No speech has been recognized yet. Check the audio input and try again.');
   if (!request.followUp) { history = []; lastIntent = ''; }
   const id = randomUUID();
   const controller = new AbortController();
   activeRequest = { id, controller };
-  const transcript = transcripts.recent(config.transcriptWindowSeconds);
   const focus = library.status().documents.find(doc => doc.id === request.focusDocumentId);
   const query = [request.intent, request.followUp ? lastIntent : '', transcript, focus?.title].filter(Boolean).join('\n');
   const sources = library.search(query, { focusDocumentId: request.focusDocumentId, section: request.section, limit: 6, maxChars: 12000 })
@@ -123,7 +197,9 @@ async function ask(request: AskRequest): Promise<void> {
   // Raw transcript stays in main; do not leave a stale copy in renderer history.
   send({ type: 'answer-start', requestId: id, sources, transcript: '' });
   try {
-    const screenshot = await captureDisplay();
+    const capture = captureDisplay();
+    activeCapture = capture;
+    const screenshot = await capture.finally(() => { if (activeCapture === capture) activeCapture = undefined; });
     controller.signal.throwIfAborted();
     const context = contextText(request.intent, transcript, sources, focus?.title);
     const answer = await streamAnswer(config, [
@@ -163,7 +239,13 @@ async function reloadLibrary(path = config.libraryPath): Promise<ReturnType<Know
 }
 
 function registerIpc(): void {
-  handle('peek:bootstrap', () => ({ config: publicConfig(config), library: library.status(), chatReady: configValid && hasKey(config.chat), transcriptionReady: configValid && !smoke && hasKey(config.transcription), warnings }));
+  handle('peek:bootstrap', () => ({ config: publicConfig(config), library: library.status(), ...credentialReadiness(), warnings }));
+  handle('peek:open-credentials', () => openCredentials());
+  setupHandle('peek:credentials-bootstrap', () => credentialState());
+  setupHandle('peek:credentials-save', value => credentialService.save(value));
+  setupHandle('peek:credentials-remove', id => credentialService.remove(id));
+  setupHandle('peek:credentials-open-key-page', () => shell.openExternal('https://platform.openai.com/api-keys'));
+  setupHandle('peek:credentials-close', () => { setupWindow?.close(); });
   handle('peek:ask', async value => { await ask(validateAsk(value)); });
   handle('peek:cancel', () => {
     const id = activeRequest?.id;
@@ -173,6 +255,7 @@ function registerIpc(): void {
   handle('peek:audio-status', (value: AudioStatus) => {
     if (!value || !['idle', 'recording', 'error'].includes(value.state)) throw new Error('Invalid audio state.');
     if (value.state === 'recording') {
+      if (setupWindow || openingSetup) throw new Error('Finish API key settings before recording.');
       if (!configValid) throw new Error('Fix config.json from the tray menu and restart Peek before recording.');
       audioRecording = true;
     } else stopAudio();
@@ -180,7 +263,7 @@ function registerIpc(): void {
   handle('peek:transcribe', async value => {
     if (!configValid) throw new Error('Fix config.json from the tray menu and restart Peek before transcribing.');
     const chunk = validateAudio(value);
-    if (!audioRecording || smoke) throw new Error('Audio is paused.');
+    if (!audioRecording || (smoke && !syntheticAudio)) throw new Error('Audio is paused.');
     if (audioController) throw new Error('Transcription is busy; skip this chunk.');
     const generation = audioGeneration;
     const controller = new AbortController();
@@ -237,6 +320,10 @@ async function start(): Promise<void> {
   const defaults = defaultConfig(platformDefaults().interactionModifiers);
   try { config = await loadConfig(configPath, defaults); }
   catch (error) { config = defaults; configValid = false; warnings.push(`Config not loaded: ${message(error)} Fix it in the tray menu and restart. The file has not been overwritten.`); }
+  credentialStore = new CredentialStore(join(directory, 'credentials.enc'), credentialEncryptionBackend());
+  try { await credentialStore.load(); } catch { credentialLoadError = true; }
+  credentialService = new CredentialService(config, credentialStore, pauseForCredentials, () => configValid);
+  setCredentialResolver(endpoint => credentialService.resolve(endpoint));
   const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
   win = new BrowserWindow({
     width: 420, height: 520, x: x + Math.max(0, width - 436), y: y + Math.min(16, Math.max(0, height - 520)),
@@ -254,10 +341,10 @@ async function start(): Promise<void> {
   });
   const allowedUrl = devUrl ? `${devUrl}/` : pathToFileURL(join(__dirname, 'renderer/index.html')).href;
   win.webContents.session.setPermissionCheckHandler((webContents, permission, _origin, details) =>
-    webContents === win.webContents && permission === 'media' && details.mediaType === 'audio' && details.requestingUrl === allowedUrl);
+    !setupWindow && !openingSetup && webContents === win.webContents && permission === 'media' && details.mediaType === 'audio' && details.requestingUrl === allowedUrl);
   win.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const mediaTypes = 'mediaTypes' in details ? details.mediaTypes ?? [] : [];
-    callback(webContents === win.webContents && permission === 'media' && details.requestingUrl === allowedUrl && mediaTypes.length > 0 && mediaTypes.every(type => type === 'audio'));
+    callback(!setupWindow && !openingSetup && webContents === win.webContents && permission === 'media' && details.requestingUrl === allowedUrl && mediaTypes.length > 0 && mediaTypes.every(type => type === 'audio'));
   });
   registerIpc();
   if (config.libraryPath) {
@@ -269,6 +356,7 @@ async function start(): Promise<void> {
   tray.setToolTip('Peek');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Peek', enabled: false },
+    { label: 'API Key / 密钥…', click: () => { void openCredentials().catch(() => warn('API key settings could not open. Restart Peek and try again.')); } },
     { label: 'Config / 配置…', click: () => { void shell.openPath(configPath).then(error => { if (error) warn(error); }); } },
     { type: 'separator' },
     { label: 'Quit / 退出', click: () => app.quit() },
@@ -287,6 +375,7 @@ async function start(): Promise<void> {
   win.webContents.on('did-start-loading', () => { stopAudio(); cancelAnswer(); history = []; lastIntent = ''; });
   win.once('ready-to-show', () => restoreVisibility());
   if (devUrl) await win.loadURL(`${devUrl}/`); else await win.loadFile(join(__dirname, 'renderer/index.html'));
+  if (!smoke && configValid && !hasKey(config.chat)) await openCredentials();
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -297,5 +386,6 @@ else {
   app.on('before-quit', () => {
     globalShortcut.unregisterAll(); stopMonitor?.(); clearInterval(transcriptTimer);
     stopAudio(); cancelAnswer(); history = []; tray?.destroy();
+    credentialService?.cancel();
   });
 }

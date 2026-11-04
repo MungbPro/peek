@@ -9,10 +9,10 @@ export interface Config extends PublicConfig {
   libraryPath: string;
 }
 
-export function defaultConfig(interactionModifiers = ['Command', 'Alt']): Config {
+export function defaultConfig(interactionModifiers = ['Alt']): Config {
   return {
     model: 'gpt-4.1-mini', language: 'zh', inputDeviceId: '', transcriptWindowSeconds: 30,
-    hotkeys: { ask: 'CommandOrControl+Shift+Space', toggle: 'CommandOrControl+Shift+H', followUp: 'CommandOrControl+Shift+Enter' },
+    hotkeys: { ask: 'Alt+Space', toggle: 'Alt+H', followUp: 'Alt+Enter' },
     interactionModifiers,
     chat: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', tokenLimitParameter: 'max_completion_tokens' },
     transcription: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', model: 'whisper-1' },
@@ -70,12 +70,35 @@ export function parseConfig(value: unknown, defaults = defaultConfig()): Config 
   return result;
 }
 export async function loadConfig(path: string, defaults: Config): Promise<Config> {
-  try { return parseConfig(JSON.parse(await readFile(path, 'utf8')), defaults); }
+  try {
+    const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
+    const migrated = migrateLegacyShortcuts(raw, defaults);
+    const config = parseConfig(migrated, defaults);
+    if (JSON.stringify(migrated) !== JSON.stringify(raw)) await saveConfig(path, config);
+    return config;
+  }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await saveConfig(path, defaults);
     return defaults;
   }
+}
+
+/** Upgrade only the exact shipped v0.1.0 bindings; keep custom choices intact. */
+export function migrateLegacyShortcuts(value: unknown, defaults = defaultConfig()): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const raw = value as Record<string, unknown>;
+  const result = { ...raw };
+  if (raw.hotkeys && typeof raw.hotkeys === 'object' && !Array.isArray(raw.hotkeys)) {
+    const hotkeys = { ...raw.hotkeys as Record<string, unknown> };
+    const old = { ask: 'CommandOrControl+Shift+Space', toggle: 'CommandOrControl+Shift+H', followUp: 'CommandOrControl+Shift+Enter' };
+    for (const key of ['ask', 'toggle', 'followUp'] as const) if (hotkeys[key] === old[key]) hotkeys[key] = defaults.hotkeys[key];
+    result.hotkeys = hotkeys;
+  }
+  if (JSON.stringify(raw.interactionModifiers) === '["Command","Alt"]' || JSON.stringify(raw.interactionModifiers) === '["Control","Alt"]') {
+    result.interactionModifiers = defaults.interactionModifiers;
+  }
+  return result;
 }
 export async function saveConfig(path: string, config: Config): Promise<void> {
   await mkdir(dirname(path), { recursive: true });

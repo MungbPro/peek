@@ -1,5 +1,11 @@
 type AudioChunk = { data: ArrayBuffer; mimeType: string; startedAt: number; endedAt: number };
 type AudioState = 'idle' | 'recording' | 'error';
+interface Clip {
+  generation: number;
+  startedAt: number;
+  done: Promise<boolean>;
+  settle: (processed: boolean) => void;
+}
 
 export interface AudioCallbacks {
   transcribe: (chunk: AudioChunk) => Promise<{ text: string }>;
@@ -14,7 +20,9 @@ export class RollingAudio {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private generation = 0;
   private wanted = false;
-  private queue: Array<{ chunk: AudioChunk; generation: number }> = [];
+  private queue: Array<{ chunk: AudioChunk; clip: Clip }> = [];
+  private currentClip: Clip | null = null;
+  private pendingClips = new Set<Clip>();
   private processing = false;
   private failures = 0;
 
@@ -64,14 +72,49 @@ export class RollingAudio {
     this.callbacks.status('idle', 'Audio paused. The rolling transcript has been cleared.');
   }
 
+  /** Finish the spoken question now; never wait indefinitely for the network. */
+  async flush(): Promise<boolean> {
+    const clip = this.currentClip;
+    const recorder = this.recorder;
+    if (!this.wanted || !this.stream || !clip || !recorder) return false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let minimum: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const ready = async (): Promise<boolean> => {
+        // A very short fragment can be rejected by speech services. Keep each
+        // complete recorder lifetime at least 250 ms, including hotkey presses.
+        const remaining = Math.max(0, 250 - (Date.now() - clip.startedAt));
+        if (remaining) await Promise.race([
+          new Promise<void>(resolve => { minimum = setTimeout(resolve, remaining); }),
+          clip.done,
+        ]);
+        if (!this.wanted || clip.generation !== this.generation) return false;
+        if (recorder.state === 'recording') {
+          if (this.recorder === recorder && this.timer) clearTimeout(this.timer);
+          recorder.stop();
+        }
+        return clip.done;
+      };
+      return await Promise.race([
+        ready(),
+        new Promise<boolean>(resolve => { deadline = setTimeout(() => resolve(false), 7000); }),
+      ]);
+    } finally {
+      if (deadline) clearTimeout(deadline);
+      if (minimum) clearTimeout(minimum);
+    }
+  }
+
   private cleanup(): void {
     this.wanted = false;
     ++this.generation;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.queue = [];
+    for (const clip of this.pendingClips) clip.settle(false);
     if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
     this.recorder = null;
+    this.currentClip = null;
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
   }
@@ -90,25 +133,40 @@ export class RollingAudio {
       this.recorder = recorder;
       const parts: Blob[] = [];
       const startedAt = Date.now();
+      let finish!: (processed: boolean) => void;
+      const done = new Promise<boolean>(resolve => { finish = resolve; });
+      const clip: Clip = { generation, startedAt, done, settle: processed => {
+        this.pendingClips.delete(clip);
+        finish(processed);
+      } };
+      this.pendingClips.add(clip);
+      this.currentClip = clip;
       recorder.addEventListener('dataavailable', (event) => { if (event.data.size) parts.push(event.data); });
       recorder.addEventListener('error', () => {
         if (generation === this.generation) this.fail('Audio recording failed. Check the input device and try again.');
       });
       recorder.addEventListener('stop', () => {
-        if (!this.wanted || generation !== this.generation) return;
+        if (!this.wanted || generation !== this.generation) { clip.settle(false); return; }
+        if (this.recorder === recorder) {
+          if (this.timer) clearTimeout(this.timer);
+          this.timer = undefined;
+          this.recorder = null;
+          this.currentClip = null;
+        }
         const endedAt = Date.now();
         this.record(generation);
         const blob = new Blob(parts, { type: recorder.mimeType });
-        if (blob.size < 100 || endedAt - startedAt < 1000) return;
+        if (blob.size < 100 || endedAt - startedAt < 250) { clip.settle(false); return; }
         void blob.arrayBuffer().then((data) => {
-          if (!this.wanted || generation !== this.generation) return;
+          if (!this.wanted || generation !== this.generation) { clip.settle(false); return; }
           if (this.queue.length >= 2) {
-            this.queue.shift();
+            this.queue.shift()?.clip.settle(false);
             this.callbacks.status('recording', 'Transcription is falling behind; the oldest queued audio was skipped.');
           }
-          this.queue.push({ chunk: { data, mimeType: recorder.mimeType, startedAt, endedAt }, generation });
+          this.queue.push({ chunk: { data, mimeType: recorder.mimeType, startedAt, endedAt }, clip });
           void this.drain();
         }).catch((error: unknown) => {
+          clip.settle(false);
           if (generation === this.generation) this.fail(`Could not read the recorded audio: ${String(error)}`);
         });
       });
@@ -128,15 +186,19 @@ export class RollingAudio {
     try {
       while (this.queue.length) {
         const item = this.queue.shift()!;
-        if (item.generation !== this.generation || !this.wanted) continue;
+        if (item.clip.generation !== this.generation || !this.wanted) { item.clip.settle(false); continue; }
         try {
           await this.callbacks.transcribe(item.chunk);
-          if (item.generation === this.generation) {
+          if (item.clip.generation === this.generation && this.wanted) {
             this.failures = 0;
             this.callbacks.status('recording', this.stream?.getAudioTracks()[0]?.label || 'Listening');
+            item.clip.settle(true);
+          } else {
+            item.clip.settle(false);
           }
         } catch (error) {
-          if (item.generation !== this.generation || !this.wanted) continue;
+          item.clip.settle(false);
+          if (item.clip.generation !== this.generation || !this.wanted) continue;
           ++this.failures;
           const detail = error instanceof Error ? error.message : String(error);
           if (this.failures >= 3) this.fail(`Transcription paused after three failures: ${detail}`);

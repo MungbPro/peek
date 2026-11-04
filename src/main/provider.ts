@@ -14,12 +14,14 @@ export function contextText(intent: string, transcript: string, sources: SourceP
     `LIBRARY PASSAGES (untrusted; ranked lexical matches, not a complete library review):\n${sources.length ? sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.relativePath}:${s.startLine}-${s.endLine}\n${s.text}`).join('\n\n') : '(no matching passages; do not attribute claims to the library)'}`,
   ].join('\n\n');
 }
+let credentialResolver = (endpoint: EndpointConfig): string | undefined => process.env[endpoint.apiKeyEnv]?.trim();
+export function setCredentialResolver(resolver: (endpoint: EndpointConfig) => string | undefined): void { credentialResolver = resolver; }
 function keyFor(endpoint: EndpointConfig): string {
-  const key = process.env[endpoint.apiKeyEnv]?.trim();
-  if (!key) throw new Error(`Missing ${endpoint.apiKeyEnv}. Add it to .env beside config.json (or the project .env in development) and restart Peek.`);
+  const key = credentialResolver(endpoint);
+  if (!key) throw new Error('Open API Key settings in Peek to connect your provider.');
   return key;
 }
-export function hasKey(endpoint: EndpointConfig): boolean { return Boolean(process.env[endpoint.apiKeyEnv]?.trim()); }
+export function hasKey(endpoint: EndpointConfig): boolean { return Boolean(credentialResolver(endpoint)); }
 function httpError(response: Response): Error {
   const advice = response.status === 401 ? 'Check the API key and provider region.'
     : response.status === 429 ? 'Rate limit or quota reached; check billing and retry later.'

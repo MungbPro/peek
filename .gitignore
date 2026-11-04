@@ -6,4 +6,6 @@ dist/
 .DS_Store
 artifacts/
 release/
+credentials.enc
+credentials.enc.*
 *.log

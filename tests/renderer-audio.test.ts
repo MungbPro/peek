@@ -125,3 +125,129 @@ test('pausing while microphone permission is pending releases the eventual strea
     else Reflect.deleteProperty(globalThis, 'navigator');
   }
 });
+
+interface FlushHarness {
+  audio: RollingAudio;
+  calls: Array<{ duration: number; header: string }>;
+  advance(milliseconds: number): Promise<void>;
+  settleRequest(success?: boolean): Promise<void>;
+  recorderCount(): number;
+}
+
+async function withFlushHarness(run: (harness: FlushHarness) => Promise<void>): Promise<void> {
+  const names = ['navigator', 'MediaRecorder', 'setTimeout', 'clearTimeout'];
+  const descriptors = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+  const originalNow = Date.now;
+  let now = 100_000;
+  Date.now = () => now;
+  let nextTimer = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const calls: FlushHarness['calls'] = [];
+  const pending: Array<{ resolve: () => void; reject: () => void }> = [];
+  let recorderCount = 0;
+  const track = new EventTarget() as EventTarget & { label: string; stop(): void };
+  track.label = 'Synthetic microphone'; track.stop = () => {};
+  class Recorder extends EventTarget {
+    static isTypeSupported(): boolean { return true; }
+    readonly mimeType = 'audio/webm;codecs=opus';
+    readonly index = recorderCount++;
+    state = 'inactive';
+    start(timeslice?: number): void { assert.equal(timeslice, undefined); this.state = 'recording'; }
+    stop(): void {
+      this.state = 'inactive';
+      const event = new Event('dataavailable') as Event & { data: Blob };
+      event.data = new Blob([`INDEPENDENT-WEBM-${this.index}:` + 'audio '.repeat(40)]);
+      this.dispatchEvent(event); this.dispatchEvent(new Event('stop'));
+    }
+  }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: {
+    getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }), enumerateDevices: async () => [],
+  } } });
+  Object.defineProperty(globalThis, 'MediaRecorder', { configurable: true, value: Recorder });
+  Object.defineProperty(globalThis, 'setTimeout', { configurable: true, value: (callback: () => void, milliseconds: number) => {
+    const id = ++nextTimer; timers.set(id, { at: now + milliseconds, callback }); return id;
+  } });
+  Object.defineProperty(globalThis, 'clearTimeout', { configurable: true, value: (id: number) => timers.delete(id) });
+  const microtasks = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
+  const audio = new RollingAudio({
+    transcribe: async chunk => {
+      calls.push({ duration: chunk.endedAt - chunk.startedAt, header: new TextDecoder().decode(chunk.data) });
+      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject: () => reject(new Error('Synthetic network failure')) }));
+      return { text: 'spoken question' };
+    }, status: () => {}, devices: () => {},
+  });
+  try {
+    await run({
+      audio, calls, recorderCount: () => recorderCount,
+      advance: async milliseconds => {
+        const target = now + milliseconds;
+        while (true) {
+          const candidate = [...timers.entries()].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+          if (!candidate) break;
+          const [id, timer] = candidate; now = timer.at; timers.delete(id); timer.callback(); await microtasks();
+        }
+        now = target; await microtasks();
+      },
+      settleRequest: async (success = true) => {
+        const request = pending.shift(); assert.ok(request, 'a transcription request must be in flight');
+        if (success) request.resolve(); else request.reject();
+        await microtasks();
+      },
+    });
+  } finally {
+    audio.stop();
+    for (const request of pending) request.resolve();
+    await microtasks();
+    Date.now = originalNow;
+    for (const [name, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+}
+
+test('flush captures the newest partial recording and waits for its transcription', async () => {
+  await withFlushHarness(async ({ audio, advance, calls, settleRequest, recorderCount }) => {
+    await audio.start('');
+    await advance(800);
+    let finished = false;
+    const flushing = audio.flush().then(value => { finished = true; return value; });
+    await advance(0);
+    assert.equal(finished, false);
+    assert.equal(calls[0]?.duration, 800);
+    assert.match(calls[0]?.header, /^INDEPENDENT-WEBM-0:/);
+    assert.equal(recorderCount(), 2, 'recording continues immediately in a new complete file');
+    await settleRequest();
+    assert.equal(await flushing, true);
+    assert.equal(audio.active, true);
+  });
+});
+
+test('flush enforces a minimum fragment and returns false after seven seconds of network delay', async () => {
+  await withFlushHarness(async ({ audio, advance, calls }) => {
+    await audio.start('');
+    const flushing = audio.flush();
+    await advance(249);
+    assert.equal(calls.length, 0);
+    await advance(1);
+    assert.equal(calls[0]?.duration, 250);
+    await advance(6750);
+    assert.equal(await flushing, false);
+    assert.equal(audio.active, true, 'a slow transcription does not stop capture');
+  });
+});
+
+test('stop and failed transcription resolve flush as false without waiting for its deadline', async () => {
+  await withFlushHarness(async ({ audio, advance, settleRequest }) => {
+    await audio.start('');
+    await advance(400);
+    const failed = audio.flush(); await advance(0);
+    await settleRequest(false);
+    assert.equal(await failed, false);
+    await advance(400);
+    const stopped = audio.flush(); await advance(0);
+    audio.stop();
+    assert.equal(await stopped, false);
+    await settleRequest();
+    assert.equal(audio.active, false);
+  });
+});

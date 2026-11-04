@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultConfig, parseConfig, publicConfig, loadConfig } from '../src/main/config';
+import { defaultConfig, parseConfig, publicConfig, loadConfig, migrateLegacyShortcuts } from '../src/main/config';
 
 test('config validates recording windows, endpoints, hotkeys, and secret names', () => {
   assert.equal(parseConfig({}).transcriptWindowSeconds, 30);
@@ -30,4 +30,16 @@ test('bad existing config is never overwritten', async () => {
     await assert.rejects(() => loadConfig(file, defaultConfig()));
     assert.equal(await readFile(file, 'utf8'), '{broken');
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('legacy three-key shortcuts migrate while custom bindings remain intact', () => {
+  const next = parseConfig(migrateLegacyShortcuts({
+    hotkeys: { ask: 'CommandOrControl+Shift+Space', toggle: 'F9', followUp: 'CommandOrControl+Shift+Enter' },
+    interactionModifiers: ['Command', 'Alt'],
+  }));
+  assert.equal(next.hotkeys.ask, 'Alt+Space');
+  assert.equal(next.hotkeys.followUp, 'Alt+Enter');
+  assert.equal(next.hotkeys.toggle, 'F9');
+  assert.deepEqual(next.interactionModifiers, ['Alt']);
+  assert.deepEqual(parseConfig(migrateLegacyShortcuts({ interactionModifiers: ['Control'] })).interactionModifiers, ['Control']);
 });

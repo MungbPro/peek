@@ -25,6 +25,7 @@ export type PeekEvent =
   | { type: 'answer-done'; requestId: string }
   | { type: 'answer-error'; requestId: string; message: string }
   | { type: 'warning'; message: string }
+  | { type: 'credentials-changed'; chatReady: boolean; transcriptionReady: boolean }
   | { type: 'library'; library: LibraryStatus };
 export interface PeekApi {
   bootstrap(): Promise<Bootstrap>;
@@ -35,6 +36,27 @@ export interface PeekApi {
   reloadLibrary(): Promise<LibraryStatus>;
   openSource(documentId: string): Promise<void>;
   audioStatus(status: AudioStatus): Promise<void>;
+  openCredentials(): Promise<void>;
   onEvent(listener: (event: PeekEvent) => void): () => void;
 }
-declare global { interface Window { peek: PeekApi } }
+export interface CredentialTarget {
+  id: 'chat' | 'transcription'; label: string; baseUrl: string; stored: boolean;
+  source: 'secure' | 'environment' | 'none'; disabled: boolean;
+}
+export interface CredentialBootstrap {
+  language: 'zh' | 'en'; secureStorageAvailable: boolean; storageError?: string;
+  targets: CredentialTarget[];
+}
+export interface CredentialResult {
+  ok: boolean;
+  code: 'saved' | 'verified' | 'removed' | 'invalid_key' | 'unauthorized' | 'forbidden' | 'quota' | 'network' | 'unavailable' | 'storage' | 'cancelled' | 'busy' | 'invalid_target' | 'unsupported';
+  state?: CredentialBootstrap;
+}
+export interface PeekSetupApi {
+  bootstrap(): Promise<CredentialBootstrap>;
+  save(request: { targetId: string; key: string; verify: boolean }): Promise<CredentialResult>;
+  remove(targetId: string): Promise<CredentialResult>;
+  openKeyPage(): Promise<void>;
+  close(): Promise<void>;
+}
+declare global { interface Window { peek: PeekApi; peekSetup: PeekSetupApi } }

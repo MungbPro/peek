@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Peek · API 密钥</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/setup.css" />
+  </head>
+  <body>
+    <main class="setup">
+      <header class="header"><div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Peek</span></div><button id="setup-language" class="text-button" type="button">中 / EN</button></header>
+      <section class="content">
+        <h1 id="setup-title">连接你的 AI</h1>
+        <p id="storage-note" class="storage-note">密钥加密保存在本机，由系统保护。</p>
+        <div id="target-row" class="target-row" hidden><label id="target-label" for="key-target">用途</label><select id="key-target"></select></div>
+        <div class="provider"><span id="provider-label">连接到</span><span id="provider-host"></span></div>
+        <div id="stored-state" class="stored-state" role="status"></div>
+        <form id="key-form" novalidate>
+          <label id="key-label" for="api-key">API 密钥</label>
+          <div class="key-field"><input id="api-key" type="password" name="peek-api-secret" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="512" placeholder="粘贴你的 API 密钥" aria-describedby="setup-status" /><button id="show-key" class="show-button" type="button" aria-pressed="false">显示</button></div>
+          <div class="key-actions"><button id="open-key-page" class="text-button" type="button">获取 OpenAI 密钥 ↗</button><button id="remove-key" class="text-button danger" type="button" hidden>删除密钥</button></div>
+          <p id="setup-status" class="status" role="status" aria-live="polite"></p>
+          <div class="save-actions"><button id="save-only" class="secondary-button" type="button" disabled>仅保存</button><button id="save-key" class="primary-button" type="submit" disabled>验证并保存</button></div>
+        </form>
+        <p id="validation-note" class="validation-note">验证连接，不验证余额或语音权限。</p>
+      </section>
+      <footer><button id="done" class="done-button" type="button">稍后设置</button></footer>
+    </main>
+    <script type="module" src="/setup.ts"></script>
+  </body>
+</html>

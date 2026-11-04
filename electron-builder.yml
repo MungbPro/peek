@@ -19,6 +19,7 @@ files:
   - '!**/.env'
   - '!**/.env.*'
   - '!**/config.json'
+  - '!**/credentials.enc*'
   - '!**/tests/**'
   - '!**/test/**'
   - '!**/artifacts/**'

@@ -9,9 +9,9 @@ npm run build
 npm run dev
 ```
 
-Keep changes small and include the problem, resulting behavior, and checks performed in your pull request. Tests must use synthetic articles and mocked API responses. Do not include API keys, real recordings, screenshots, transcripts, or private Obsidian vaults in commits or bug reports.
+Keep changes small and include the problem, resulting behavior, and checks performed in your pull request. Tests must use synthetic articles and mocked API responses. Do not include API keys, `.env`, `credentials.enc`, real recordings, screenshots, transcripts, or private Obsidian vaults in commits or bug reports. Credential tests must use synthetic keys and injected storage/network doubles; distinguish those checks from a real OS-keychain or API test.
 
-Peek uses Electron 30, plain TypeScript, and CSS. Keep API credentials and network requests in the main process. Keep native platform details in `src/main/platform.ts`. Audio, transcripts, and conversation state must remain in memory. See `HONESTY.md` before changing capture, routing, or privacy claims.
+Peek uses Electron 30, plain TypeScript, and CSS. Keep credential decryption, persistence, and API requests in the main process. Only the isolated setup renderer may briefly hold a user-entered key; clear it on submission and never expose a stored key through IPC, logs, errors, or status responses. Use OS-backed encryption and fail closed when it is unavailable. Keep native platform details in `src/main/platform.ts`. Audio, transcripts, and conversation state must remain in memory. See `HONESTY.md` before changing capture, routing, or privacy claims.
 
 ## macOS packages
 

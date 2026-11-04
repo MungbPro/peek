@@ -1,9 +1,20 @@
 import type { App, BrowserWindow } from 'electron';
+import { safeStorage } from 'electron';
+import type { EncryptionBackend } from './credentials';
+
+/** Refuse unsupported/plaintext backends; never downgrade credential storage. */
+export function credentialEncryptionBackend(): EncryptionBackend {
+  return {
+    isEncryptionAvailable: () => (process.platform === 'darwin' || process.platform === 'win32') && safeStorage.isEncryptionAvailable(),
+    encryptString: value => safeStorage.encryptString(value),
+    decryptString: value => safeStorage.decryptString(value),
+  };
+}
 
 export function platformDefaults(): { interactionModifiers: string[]; primaryShortcutModifier: string } {
   return process.platform === 'darwin'
-    ? { interactionModifiers: ['Command', 'Alt'], primaryShortcutModifier: 'Command' }
-    : { interactionModifiers: ['Control', 'Alt'], primaryShortcutModifier: 'Control' };
+    ? { interactionModifiers: ['Alt'], primaryShortcutModifier: 'Command' }
+    : { interactionModifiers: ['Alt'], primaryShortcutModifier: 'Control' };
 }
 
 export function getPlatformPermissionHelp(): string {

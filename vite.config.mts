@@ -10,5 +10,8 @@ export default defineConfig({
   envDir: resolve(projectRoot, 'src/renderer'),
   envPrefix: 'PEEK_PUBLIC_',
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
-  build: { outDir: resolve(projectRoot, 'dist/renderer'), emptyOutDir: true },
+  build: {
+    outDir: resolve(projectRoot, 'dist/renderer'), emptyOutDir: true,
+    rolldownOptions: { input: { overlay: resolve(projectRoot, 'src/renderer/index.html'), setup: resolve(projectRoot, 'src/renderer/setup.html') } },
+  },
 });
