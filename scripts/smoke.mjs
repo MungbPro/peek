@@ -11,7 +11,8 @@ try {
   await mkdir(join(vault, '文学'), { recursive: true });
   await writeFile(join(vault, '文学', 'memory.md'), '# 记忆与叙事\n\nMemory links literature and identity.\n');
   await writeFile(join(temporary, 'config.json'), JSON.stringify({ libraryPath: vault, chat: { apiKeyEnv: 'PEEK_SMOKE_NO_KEY' }, transcription: { apiKeyEnv: 'PEEK_SMOKE_NO_KEY' } }));
-  app = await electron.launch({ args: ['.', '--smoke-test', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'], env: { ...process.env, PEEK_TEST_USER_DATA: temporary, PEEK_SMOKE_NO_KEY: '', PEEK_DEV_URL: '' } });
+  const executablePath = process.env.PEEK_SMOKE_EXECUTABLE ? resolve(process.env.PEEK_SMOKE_EXECUTABLE) : undefined;
+  app = await electron.launch({ executablePath, args: [...(executablePath ? [] : ['.']), '--smoke-test', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'], env: { ...process.env, PEEK_TEST_USER_DATA: temporary, PEEK_SMOKE_NO_KEY: '', PEEK_DEV_URL: '' } });
   const page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));

@@ -2,6 +2,8 @@
 
 桌面上的轻量 AI 助手：读取当前屏幕、最近的语音和本地 Obsidian 文章，给出简短回答。macOS 优先，支持 Apple Silicon 和 Intel 构建。Electron 30 + TypeScript + Vite，界面为原生 TypeScript/CSS，默认中文，可切换英文。[MIT 开源许可](LICENSE)。
 
+[下载 macOS 预览版 / Downloads](https://github.com/MungbPro/peek/releases) · [English](#english-quick-guide)
+
 **屏幕共享时不保证隐藏。** 上台前请用实际投屏、录屏或会议软件检查观众端画面。已知限制见 [HONESTY.md](HONESTY.md)。
 
 ## 60 秒开始
@@ -149,7 +151,7 @@ macOS 安装包未签名、未公证；首次打开可能需要在系统设置�
 
 API key 仅在主进程加载，renderer 通过受限 IPC 请求转写和聊天。截图、语音片段和选中的文章摘录会发送给配置的 API；文章索引、对话和滚动转写仅在内存中，应用不主动把音频写入磁盘。无登录、遥测、数据库、同步或自动更新。请勿提交 `.env` 或私人 vault。
 
-已验证：20 项本地测试、实际 Electron 启动与隔离、中文/英文界面、模拟截图至回答及追问的完整 IPC 流程、Chromium 生成独立 WebM 音频文件。真实 API、实体麦克风、屏幕录制授权和观众端隐藏仍需实测。
+已验证：20 项本地测试、实际 Electron 启动与隔离、中文/英文界面、模拟截图至回答及追问的完整 IPC 流程、Chromium 生成独立 WebM 音频文件。Apple Silicon 安装版与 Rosetta 下的 Intel 安装版均通过启动检查；GitHub CI 的两个原生架构构建及原生模块加载也已通过。真实 API、实体麦克风、屏幕录制授权和观众端隐藏仍需实测。
 
 ## English quick guide
 
